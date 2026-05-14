@@ -1,0 +1,16 @@
+{
+  "description": "Mark background jobs as detached on CC session end and prune old logs.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs\" gc --session-id \"${CC_SESSION_ID:-$session_id}\"",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}

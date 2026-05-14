@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "cc-oc",
+  "owner": {
+    "name": "anfreire"
+  },
+  "plugins": [
+    {
+      "name": "oc",
+      "source": "./plugins/oc",
+      "description": "Controlled opencode launcher from Claude Code. Per-spawn MCP exclusion, session ledger, foreground or background."
+    }
+  ]
+}

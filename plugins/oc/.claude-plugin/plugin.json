@@ -1,0 +1,15 @@
+{
+  "name": "oc",
+  "version": "0.1.0",
+  "description": "Controlled opencode launcher from Claude Code. Read-only by default; foreground or background; per-spawn MCP exclusion; tail in-progress jobs on demand.",
+  "author": {
+    "name": "anfreire"
+  },
+  "keywords": [
+    "opencode",
+    "claude-code",
+    "launcher",
+    "mcp",
+    "sub-agent"
+  ]
+}
