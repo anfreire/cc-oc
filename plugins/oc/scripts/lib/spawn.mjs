@@ -36,15 +36,14 @@ function isActiveRecord(record) {
   return record.status === "running" || record.status === "queued" || record.pending === true;
 }
 
-function buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, fresh, pure, extra = [] }) {
+function buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, pure, extra = [] }) {
   const args = ["run", "--format", "json"];
   if (sandbox === "workspace-write") args.push("--dangerously-skip-permissions");
   if (cwd) { args.push("--dir", cwd); }
   if (model) { args.push("--model", model); }
   if (variant) { args.push("--variant", variant); }
   if (agent) { args.push("--agent", agent); }
-  // --fresh means: do not resume — pass no --session even if continueId was set.
-  if (continueId && !fresh) { args.push("--session", continueId); }
+  if (continueId) { args.push("--session", continueId); }
   if (pure) { args.push("--pure"); }
   for (const e of extra) args.push(e);
   return args;
@@ -107,7 +106,6 @@ export async function runForeground({
   cwd,
   sandbox = "read-only",
   continueId = null,
-  fresh = false,
   pure = false,
   ccSessionId = null,
   jobClass = "fg",
@@ -116,7 +114,7 @@ export async function runForeground({
   reasoning = false,
   onDigest = null
 }) {
-  const args = buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, fresh, pure });
+  const args = buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, pure });
   args.push("--", prompt);
   const spawnEnv = buildSpawnEnv({ configDir, env, disableProjectConfig });
 
@@ -263,13 +261,12 @@ export async function runBackground({
   cwd,
   sandbox = "read-only",
   continueId = null,
-  fresh = false,
   pure = false,
   ccSessionId = null,
   env = process.env,
   disableProjectConfig = false
 }) {
-  const args = buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, fresh, pure });
+  const args = buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, pure });
   args.push("--", prompt);
   const spawnEnv = buildSpawnEnv({ configDir, env, disableProjectConfig });
   try {

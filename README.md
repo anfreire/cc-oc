@@ -41,7 +41,7 @@ After `/reload-plugins` (or on the next Claude Code session), `/oc:spawn`, `/oc:
 ## Quick start
 
 ```text
-/oc:spawn --read-only -- "summarize the architecture of this repo"
+/oc:spawn -- "summarize the architecture of this repo"
 /oc:spawn --bg -- "find every place that calls foo() and report"
 /oc:spawn --exclude-mcp playwright -- "quick scan, no browser needed"
 /oc:tail                                 # peek at the latest job
@@ -57,7 +57,7 @@ Append `--help` to any command for the full flag list inline.
 
 | Command | Purpose |
 |---|---|
-| `/oc:spawn` | Spawn an opencode task. Foreground by default; opencode's own permission gating applies (override with `--write`). Flags: `--bg`, `--write`, `--model`, `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--fresh`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--reasoning`, `--json`. Prompt after `--`. |
+| `/oc:spawn` | Spawn an opencode task. Foreground by default; opencode's own permission gating applies (override with `--write`). Flags: `--bg`, `--write`, `--model`, `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--reasoning`, `--json`. Prompt after `--`. |
 | `/oc:tail` | Stream/peek a session's events. Flags: `--follow`, `--lines N`, `--since ms`, `--reasoning`, `--raw`, `--json`. No arg → latest active job. |
 | `/oc:sessions` | List + inspect. Flags: `--all`, `--json`. Pass a session id (or unique prefix) for full details. |
 | `/oc:cancel` | Cancel one or all. `--all` scopes to this CC session; add `--workspace` to widen. `--json` for machine-readable. |
@@ -140,7 +140,7 @@ Under the hood, when there's anything to exclude, the plugin writes a tiny `open
 
 ## Trust model
 
-The plugin runs entirely on your machine, against your `~/.claude/oc.json` and your authenticated `opencode`. The Bash glue (`$ARGUMENTS` piped over stdin in command markdown) prevents shell metacharacters in your prompt from being reinterpreted by the shell. The plugin never opens a network listener and never uploads anything.
+The plugin runs entirely on your machine, against your `~/.claude/oc.json` and your authenticated `opencode`. The command wrappers send `$ARGUMENTS` over stdin so shell metacharacters in your prompt are not reinterpreted by the shell. The plugin never opens a network listener and never uploads anything.
 
 ## Background jobs at CC session end
 

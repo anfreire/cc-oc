@@ -83,8 +83,8 @@ function isPlainObject(v) {
 }
 
 // Merge user overrides on top of defaults, one shallow level deep per known
-// section. Unknown top-level keys are preserved verbatim so validateConfig can
-// surface them as errors (rather than silently disappearing).
+// section. Unknown top-level keys are preserved verbatim but ignored at runtime;
+// schema-aware editors can still flag them without blocking a spawn.
 export function applyDefaults(user) {
   const u = isPlainObject(user) ? user : {};
   const out = structuredClone(DEFAULT_CONFIG);
@@ -96,23 +96,6 @@ export function applyDefaults(user) {
     }
   }
   return out;
-}
-
-// Top-level + per-section allowed keys. Mirrored from the JSON schema so the
-// runtime validator rejects the same shapes the schema does (the schema sets
-// `additionalProperties: false` at each of these levels for IDE tooling).
-const ALLOWED_TOP_KEYS = new Set(["$schema", "opencode", "retention"]);
-const ALLOWED_OPENCODE_KEYS = new Set([
-  "model", "variant", "agent", "sandbox",
-  "disableProjectConfig", "pure", "excludeMcps"
-]);
-const ALLOWED_RETENTION_KEYS = new Set(["logsDays", "maxLogsMb"]);
-
-function checkUnknownKeys(obj, allowed, errors, prefix) {
-  if (!isPlainObject(obj)) return;
-  for (const k of Object.keys(obj)) {
-    if (!allowed.has(k)) errors.push(`unknown key ${prefix}${k}`);
-  }
 }
 
 function checkStringOrNull(value, label, errors) {
@@ -144,7 +127,8 @@ export function validateConfig(config) {
   if (!isPlainObject(config)) {
     return { ok: false, errors: ["config must be an object"] };
   }
-  checkUnknownKeys(config, ALLOWED_TOP_KEYS, errors, "");
+  // Runtime validation only covers values cc-oc consumes directly. Unknown keys
+  // are ignored so editor schema feedback never becomes a spawn-time blocker.
   // $schema is conventional metadata pointing at a JSON-schema URL; only ever a string.
   if (config.$schema !== undefined && typeof config.$schema !== "string") {
     errors.push("$schema must be a string");
@@ -155,7 +139,6 @@ export function validateConfig(config) {
     if (!isPlainObject(oc)) {
       errors.push("opencode must be an object");
     } else {
-      checkUnknownKeys(oc, ALLOWED_OPENCODE_KEYS, errors, "opencode.");
       checkStringOrNull(oc.model, "opencode.model", errors);
       checkStringOrNull(oc.variant, "opencode.variant", errors);
       checkStringOrNull(oc.agent, "opencode.agent", errors);
@@ -174,7 +157,6 @@ export function validateConfig(config) {
     if (!isPlainObject(ret)) {
       errors.push("retention must be an object");
     } else {
-      checkUnknownKeys(ret, ALLOWED_RETENTION_KEYS, errors, "retention.");
       checkInteger(ret.logsDays, "retention.logsDays", errors, { min: 0 });
       checkInteger(ret.maxLogsMb, "retention.maxLogsMb", errors, { min: 0 });
     }

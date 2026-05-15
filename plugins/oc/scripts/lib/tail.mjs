@@ -3,12 +3,12 @@
 import fs from "node:fs";
 import { renderEvent } from "./render.mjs";
 
-function parseNdjson(buf) {
+function parseLogEvents(buf) {
   const out = [];
   for (const line of buf.split("\n")) {
     const t = line.trim();
     if (t === "") continue;
-    try { out.push(JSON.parse(t)); } catch { /* skip malformed */ }
+    try { out.push(JSON.parse(t)); } catch { out.push({ type: "stderr", text: t }); }
   }
   return out;
 }
@@ -28,11 +28,11 @@ function isTerminalEvent(event) {
 export function readDigest(logFile, { lines: maxLines = null, since = null, reasoning = false } = {}) {
   if (!fs.existsSync(logFile)) return { digest: "", terminal: false, eventCount: 0 };
   const raw = fs.readFileSync(logFile, "utf8");
-  const events = parseNdjson(raw);
+  const events = parseLogEvents(raw);
   const filtered = since
     ? events.filter((e) => typeof e.timestamp === "number" && e.timestamp >= since)
     : events;
-  const sliced = maxLines && filtered.length > maxLines ? filtered.slice(-maxLines) : filtered;
+  const sliced = maxLines === null ? filtered : (maxLines === 0 ? [] : filtered.slice(-maxLines));
   const digestLines = [];
   for (const ev of sliced) {
     const line = renderEvent(ev, { reasoning });
@@ -65,7 +65,7 @@ export async function followLog(logFile, { reasoning = false, onLine = null, tim
       const lastNl = text.lastIndexOf("\n");
       const complete = lastNl >= 0 ? text.slice(0, lastNl) : "";
       lastLineFragment = lastNl >= 0 ? text.slice(lastNl + 1) : text;
-      const events = parseNdjson(complete);
+      const events = parseLogEvents(complete);
       let sawTerminal = false;
       for (const ev of events) {
         const line = renderEvent(ev, { reasoning });

@@ -25,6 +25,7 @@ import {
 } from "./lib/ledger.mjs";
 
 const SUBCMDS = new Set(["spawn", "tail", "sessions", "cancel", "gc"]);
+const DONE_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function die(msg, code = 1) {
   process.stderr.write(`oc: ${msg}\n`);
@@ -87,7 +88,6 @@ Flags:
   --agent <name>      Pin a specific opencode agent for this spawn
   --cwd <path>        Workspace root (default: current directory)
   --continue <sid>    Resume a previous opencode session
-  --fresh             Reject when combined with --continue (else no effect)
   --exclude-mcp <csv> Disable these MCP servers for this spawn
   --include-mcp <csv> Re-enable these (escape hatch for globally-excluded servers)
   --pure / --no-pure  Skip / include opencode's external plugins
@@ -175,7 +175,6 @@ async function cmdSpawn(argv) {
     "agent":     { type: "string" },
     "cwd":       { type: "string" },
     "continue":  { type: "string" },
-    "fresh":     { type: "boolean" },
     "exclude-mcp": { type: "string" },
     "include-mcp": { type: "string" },
     "pure":      { type: "boolean" },
@@ -188,10 +187,6 @@ async function cmdSpawn(argv) {
   const prompt = promptParts.join(" ").trim();
   if (prompt === "") die("missing prompt — usage: /oc:spawn [flags] -- <prompt>");
 
-  // Mutually exclusive resume flags.
-  if (flags.continue && flags.fresh) {
-    die("--continue and --fresh are mutually exclusive");
-  }
   // --reasoning is a stream-time control: there is no stream to attach it to
   // for a detached --bg spawn. Surface the mismatch instead of dropping silently.
   if (flags.bg && flags.reasoning) {
@@ -199,10 +194,10 @@ async function cmdSpawn(argv) {
   }
 
   const env = process.env;
-  const { config } = loadUserConfig({ env });
+  const { config, source } = loadUserConfig({ env });
   const cfgValid = validateConfig(config);
   if (!cfgValid.ok) {
-    die(`~/.claude/oc.json is invalid:\n  - ${cfgValid.errors.join("\n  - ")}`);
+    die(`${source ?? "oc config"} is invalid:\n  - ${cfgValid.errors.join("\n  - ")}`);
   }
   const effective = applySpawnOverrides(config, flags);
   const sandbox = effective.opencode.sandbox || "read-only";
@@ -226,7 +221,6 @@ async function cmdSpawn(argv) {
     cwd,
     sandbox,
     continueId: flags.continue || null,
-    fresh: Boolean(flags.fresh),
     pure: Boolean(effective.opencode.pure),
     ccSessionId: ccSessionIdFromEnv(),
     env,
@@ -329,6 +323,12 @@ async function cmdTail(argv) {
   }
 
   if (flags.follow) {
+    if (DONE_STATUSES.has(record.status)) {
+      const { digest } = readDigest(logFile, { lines: null, since: null, reasoning: Boolean(flags.reasoning) });
+      process.stdout.write(digest);
+      if (digest && !digest.endsWith("\n")) process.stdout.write("\n");
+      return;
+    }
     const result = await followLog(logFile, { reasoning: Boolean(flags.reasoning) });
     if (result.timedOut) die(`tail timed out after 15 min`);
     return;
@@ -336,7 +336,8 @@ async function cmdTail(argv) {
 
   const lines = parseNonNegativeIntFlag(flags.lines, "--lines");
   const since = parseNonNegativeIntFlag(flags.since, "--since");
-  const { digest, terminal, eventCount } = readDigest(logFile, { lines, since, reasoning: Boolean(flags.reasoning) });
+  const { digest, terminal: logTerminal, eventCount } = readDigest(logFile, { lines, since, reasoning: Boolean(flags.reasoning) });
+  const terminal = logTerminal || DONE_STATUSES.has(record.status);
 
   if (flags.json) {
     process.stdout.write(JSON.stringify({
@@ -389,8 +390,7 @@ async function cmdSessions(argv) {
 
   if (sessions.length === 0) { process.stdout.write("(no sessions)\n"); return; }
   for (const s of sessions) {
-    const mark = s.status === "running" ? "•" : s.status === "completed" ? "✓" : s.status === "cancelled" ? "⊘" : s.status === "failed" ? "✗" : "?";
-    process.stdout.write(`${mark} ${s.sessionId}  [${s.jobClass}/${s.status}]  ${s.promptSummary}\n`);
+    process.stdout.write(`${s.sessionId}  [${s.jobClass}/${s.status}]  ${s.promptSummary}\n`);
   }
 }
 
@@ -531,18 +531,18 @@ function splitFlagsAndPrompt(raw) {
 // CC's slash-command harness passes `$ARGUMENTS` to us verbatim, which means
 // the user-typed quotes around the prompt arrive literally in the buffer
 // (e.g. `-- "review the diff"`). Peel one matching outer-quote pair and the
-// trailing newline that printf-piped input usually carries. Everything inside
+// trailing newline that shell stdin helpers usually carry. Everything inside
 // is left untouched — repeated spaces, embedded quotes, $, backticks, all of
 // it passes through.
 function stripPromptShell(s) {
-  let out = s.replace(/^[ \t]+/, "");
+  let out = s.replace(/^[ \t]+/, "").replace(/\n+$/, "");
   if (out.length >= 2) {
     const first = out[0], last = out[out.length - 1];
     if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
       out = out.slice(1, -1);
     }
   }
-  return out.replace(/\n+$/, "");
+  return out;
 }
 
 // ─── main ───────────────────────────────────────────────────────────────────
@@ -559,7 +559,7 @@ async function main() {
   // Two stdin modes:
   //
   //   --stdin        (slash-command pattern): the whole $ARGUMENTS string —
-  //                  flags AND prompt together — is piped in on stdin so the
+  //                  flags AND prompt together — is sent over stdin so the
   //                  shell never gets a chance to reinterpret it. We split
   //                  on the first ` -- ` separator: flag portion is tokenised,
   //                  prompt portion is preserved verbatim.

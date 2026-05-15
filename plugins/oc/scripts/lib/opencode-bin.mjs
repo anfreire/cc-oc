@@ -22,7 +22,7 @@ export function findOpencodeBinary({ env = process.env } = {}) {
     throw new Error(`OPENCODE_BIN is set to ${JSON.stringify(candidate)} but that path is not executable.`);
   }
   // 2. PATH lookup via `which`.
-  const which = spawnSync("which", ["opencode"], { encoding: "utf8" });
+  const which = spawnSync("which", ["opencode"], { env, encoding: "utf8" });
   if (which.status === 0 && which.stdout.trim() !== "") return which.stdout.trim();
   return null;
 }

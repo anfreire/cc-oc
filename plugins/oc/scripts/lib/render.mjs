@@ -21,7 +21,8 @@ function tsString(ms) {
 function clip(s, max = 120) {
   const str = String(s ?? "").replace(/\s+/g, " ").trim();
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  if (max <= 3) return str.slice(0, max);
+  return str.slice(0, max - 3) + "...";
 }
 
 function summarizeJson(value, max = 120) {
@@ -63,13 +64,18 @@ export function renderEvent(event, { reasoning = false } = {}) {
     return `[${ts}] step finish`;
   }
   if (topType === "session_idle" || topType === "session.idle") {
-    return `[${ts}] ✓ session idle`;
+    return `[${ts}] session idle`;
   }
   if (topType === "session_error" || topType === "session.error") {
-    return `[${ts}] ✗ session error: ${extractErrorMessage(event)}`;
+    return `[${ts}] session error: ${extractErrorMessage(event)}`;
   }
   if (topType === "error") {
-    return `[${ts}] ✗ error: ${extractErrorMessage(event)}`;
+    return `[${ts}] error: ${extractErrorMessage(event)}`;
+  }
+  if (topType === "stderr") {
+    const text = event.text ?? event.message ?? "";
+    if (!text) return null;
+    return `[${ts}] stderr: ${clip(text, 200)}`;
   }
 
   if (topType === "text" || partType === "text") {

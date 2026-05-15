@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.1 — 2026-05-15
+
+Friction reduction and graceful-output pass.
+
+- Slash-command wrappers now invoke `node` directly via here-string (`node ... <<< "$ARGUMENTS"`) instead of piping through `printf`, matching their `allowed-tools: Bash(node:*)` declaration and removing implicit `printf` permission prompts on every spawn.
+- Background stderr now appears in `/oc:tail` rather than being silently dropped as malformed NDJSON.
+- Finished sessions (`completed` / `failed` / `cancelled`) no longer suggest `--follow` or time out in tail.
+- Runtime config validation ignores unknown keys and only checks values cc-oc itself consumes (the JSON schema remains strict for editor tooltips).
+- Removed `--fresh` flag — it had no positive effect (the default is already a fresh thread; it only error-caught `--continue && --fresh`).
+- Command markdown files trimmed: flag tables removed in favour of `--help` (single source of truth in `oc.mjs`).
+- Fixes: `--lines 0` now returns zero events; config error messages name the actual path when `CLAUDE_HOME` is set; `findOpencodeBinary` respects the provided env when calling `which`; digest markers and session listing are ASCII-only for non-UTF terminals; quote-stripping handles here-string trailing newlines.
+
 ## 0.1.0 — 2026-05-15
 
 Initial release.

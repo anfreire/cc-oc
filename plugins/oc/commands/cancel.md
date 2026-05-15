@@ -4,18 +4,16 @@ argument-hint: "<session-id> | --all [--workspace] [--json]"
 allowed-tools: Bash(node:*)
 ---
 
-`$ARGUMENTS`:
-- `<session-id>` (full or unique prefix) → cancel that session.
-- `--all` → cancel every running session in this CC session.
-- `--all --workspace` → cancel every running session in the current workspace (across CC sessions).
-- `--json` → machine-readable result.
+`$ARGUMENTS` accepts a session id (full or unique prefix), or `--all` to cancel every running session in this CC session (add `--workspace` to widen to the current workspace).
 
-Cancellation is best-effort: `opencode session abort` is invoked first to notify OpenCode's own session DB, then SIGTERM is sent to any tracked background PID, then the ledger entry is marked `cancelled`.
+Cancellation is best-effort: `opencode session abort` first, then SIGTERM to any tracked PID, then the ledger entry is marked `cancelled`.
+
+For the full flag list, run `/oc:cancel --help`.
 
 Run:
 
 ```bash
-printf '%s' "$ARGUMENTS" | node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" cancel --stdin
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" cancel --stdin <<< "$ARGUMENTS"
 ```
 
 Output rules:

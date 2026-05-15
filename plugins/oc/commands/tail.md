@@ -4,20 +4,14 @@ argument-hint: "[session-id] [--follow] [--lines N] [--since ms] [--reasoning] [
 allowed-tools: Bash(node:*)
 ---
 
-`$ARGUMENTS`:
-- No arg → latest active job from this CC session.
-- `<session-id>` (full or unique prefix) → that session.
-- `--follow` blocks until the session reaches an idle/error event (max 15 min).
-- `--lines N` returns only the last N events.
-- `--since <ts-ms>` filters events newer than the given timestamp.
-- `--reasoning` includes thinking/reasoning lines (off by default to save tokens).
-- `--raw` emits the raw NDJSON instead of a digest.
-- `--json` wraps the result in a JSON envelope.
+`$ARGUMENTS` accepts a session id (full or unique prefix). With no arg, tails the latest active job in this CC session.
+
+For the full flag list, run `/oc:tail --help`.
 
 Run:
 
 ```bash
-printf '%s' "$ARGUMENTS" | node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail --stdin
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail --stdin <<< "$ARGUMENTS"
 ```
 
 Output rules:
