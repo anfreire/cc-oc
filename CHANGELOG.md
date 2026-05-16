@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 — 2026-05-16
+
+Security and correctness fixes.
+
+- **Shell-safety fix — present since 0.1.0; updating is recommended.** The four `/oc:*` slash-command wrappers passed `$ARGUMENTS` to `oc.mjs` as `<<< "$ARGUMENTS"`. Claude Code substitutes `$ARGUMENTS` textually, so a user's own quotes collided with the wrapper's: any prompt containing quotes or repeated whitespace was corrupted before reaching the model, and a prompt containing shell metacharacters (`;`, `&&`, backticks, …) could execute arbitrary commands. All four wrappers now pass `$ARGUMENTS` through a single-quoted heredoc, so the prompt reaches `oc.mjs` verbatim and the shell never reinterprets it.
+- `--cwd` pointing at a non-existent directory failed with a bare `spawn <opencode> ENOENT` that misleadingly implicated the opencode binary; it now fails with a clear `--cwd is not an existing directory: <path>`.
+- A non-object `opencode` or `retention` block in `~/.claude/oc.json` was silently discarded by `applyDefaults` before the validator ran. Config validation now runs on the raw parsed config, so a malformed block is rejected with a specific error instead of being ignored.
+
 ## 0.1.1 — 2026-05-15
 
 Friction reduction and graceful-output pass.

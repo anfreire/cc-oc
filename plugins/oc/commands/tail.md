@@ -11,7 +11,9 @@ For the full flag list, run `/oc:tail --help`.
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail --stdin <<< "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail --stdin <<'__OC_ARGV__'
+$ARGUMENTS
+__OC_ARGV__
 ```
 
 Output rules:

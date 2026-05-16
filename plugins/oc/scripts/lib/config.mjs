@@ -66,7 +66,7 @@ function stripJsoncComments(text) {
 
 export function loadUserConfig({ filePath = null, env = process.env } = {}) {
   const fp = filePath ?? defaultConfigPath(env);
-  if (!fs.existsSync(fp)) return { config: structuredClone(DEFAULT_CONFIG), source: null, exists: false };
+  if (!fs.existsSync(fp)) return { config: structuredClone(DEFAULT_CONFIG), rawConfig: null, source: null, exists: false };
   let raw;
   try { raw = fs.readFileSync(fp, "utf8"); } catch (e) {
     throw new Error(`failed to read ${fp}: ${e.message}`);
@@ -75,7 +75,9 @@ export function loadUserConfig({ filePath = null, env = process.env } = {}) {
   try { parsed = JSON.parse(stripJsoncComments(raw)); } catch (e) {
     throw new Error(`${fp} is not valid JSON: ${e.message}`);
   }
-  return { config: applyDefaults(parsed), source: fp, exists: true };
+  // rawConfig is the parsed-but-not-defaulted config; validateConfig runs on it
+  // so that a non-object opencode/retention block is caught instead of dropped.
+  return { config: applyDefaults(parsed), rawConfig: parsed, source: fp, exists: true };
 }
 
 function isPlainObject(v) {

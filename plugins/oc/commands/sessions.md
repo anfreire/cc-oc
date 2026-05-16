@@ -11,7 +11,9 @@ For the full flag list, run `/oc:sessions --help`. To cancel a session, use `/oc
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" sessions --stdin <<< "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" sessions --stdin <<'__OC_ARGV__'
+$ARGUMENTS
+__OC_ARGV__
 ```
 
 Output rules:

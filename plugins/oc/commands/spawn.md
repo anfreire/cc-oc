@@ -20,7 +20,9 @@ For the full flag list, run `/oc:spawn --help`.
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --stdin <<< "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --stdin <<'__OC_ARGV__'
+$ARGUMENTS
+__OC_ARGV__
 ```
 
 Output rules:

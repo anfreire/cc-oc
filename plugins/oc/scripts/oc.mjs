@@ -194,8 +194,10 @@ async function cmdSpawn(argv) {
   }
 
   const env = process.env;
-  const { config, source } = loadUserConfig({ env });
-  const cfgValid = validateConfig(config);
+  const { config, rawConfig, source } = loadUserConfig({ env });
+  // Validate the raw parsed config: applyDefaults() would otherwise silently
+  // discard a non-object opencode/retention block before the validator sees it.
+  const cfgValid = validateConfig(rawConfig ?? config);
   if (!cfgValid.ok) {
     die(`${source ?? "oc config"} is invalid:\n  - ${cfgValid.errors.join("\n  - ")}`);
   }
@@ -209,6 +211,13 @@ async function cmdSpawn(argv) {
   if (!bin) die("opencode binary not found on PATH. Install it (`curl -fsSL https://opencode.ai/install | bash`) and rerun.");
 
   const cwd = flags.cwd || process.cwd();
+  // A bad --cwd would otherwise surface as a bare `spawn <opencode> ENOENT`,
+  // which misleadingly points at the binary rather than the missing directory.
+  if (flags.cwd) {
+    let st = null;
+    try { st = fs.statSync(cwd); } catch { /* missing */ }
+    if (!st || !st.isDirectory()) die(`--cwd is not an existing directory: ${cwd}`);
+  }
   const built = buildConfigDir({ config: effective, env });
 
   const common = {
