@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 — 2026-05-16
+
+Session-scoping fix and resume documentation.
+
+- **Per-Claude-Code-session scoping fix.** `/oc:sessions`, `/oc:tail` (with no session argument), `/oc:cancel --all`, and the SessionEnd `gc` hook are meant to scope to the current Claude Code session, but the session id was read from `CC_SESSION_ID` / `OC_PLUGIN_SESSION_ID` — environment variables Claude Code does not set — so it was always empty and those commands silently widened to every cc-oc session in the workspace. The id is now read from `CLAUDE_CODE_SESSION_ID` (the variable Claude Code actually exports), with the former names kept as fallbacks.
+- Session resume is now documented. `/oc:spawn --continue <session-id>` resumes a prior opencode session with its full conversation history; the flag worked already but had no example or explanation outside `oc.mjs --help`. `spawn.md`, the `oc-delegate` subagent, and the README now cover it — including how cc-oc's `--continue <id>` maps to opencode's `--session` (resume a specific session), distinct from opencode's bare `--continue` (resume the last session).
+
 ## 0.1.2 — 2026-05-16
 
 Security and correctness fixes.

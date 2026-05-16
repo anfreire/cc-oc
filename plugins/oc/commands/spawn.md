@@ -13,9 +13,12 @@ Examples:
 /oc:spawn --bg -- "Trace how config flows from CLI flag to runtime"
 /oc:spawn --write -- "Apply the smallest fix that makes test foo pass"
 /oc:spawn --exclude-mcp playwright -- "Quick scan, no browser MCP needed"
+/oc:spawn --continue <session-id> -- "Now add error handling to that function"
 ```
 
-For the full flag list, run `/oc:spawn --help`.
+`--continue <session-id>` resumes a prior opencode session with its full
+conversation history — a follow-up turn, not a fresh run. Find the id with
+`/oc:sessions`. For the full flag list, run `/oc:spawn --help`.
 
 Run:
 

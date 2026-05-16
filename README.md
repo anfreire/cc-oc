@@ -44,6 +44,7 @@ After `/reload-plugins` (or on the next Claude Code session), `/oc:spawn`, `/oc:
 /oc:spawn -- "summarize the architecture of this repo"
 /oc:spawn --bg -- "find every place that calls foo() and report"
 /oc:spawn --exclude-mcp playwright -- "quick scan, no browser needed"
+/oc:spawn --continue <id> -- "now write tests for what you found"
 /oc:tail                                 # peek at the latest job
 /oc:tail --follow                        # block until done
 /oc:sessions                             # list your spawned jobs
@@ -65,6 +66,22 @@ Append `--help` to any command for the full flag list inline.
 ### `oc-delegate` subagent
 
 The plugin also ships an optional `oc-delegate` subagent. Claude may invoke it on its own when an autonomous plan reaches a step that would bloat the parent context (large explorations, second-opinion reviews, sandboxed writes). The subagent makes one delegated `/oc:spawn` call and returns only a short summary — the verbatim opencode transcript stays in the subagent's own context.
+
+## Resuming a session
+
+opencode sessions are multi-turn. `--continue <session-id>` makes a `/oc:spawn`
+a **follow-up** to a prior session — the spawned model receives that session's
+full conversation history, not a cold prompt.
+
+```text
+/oc:spawn -- "trace how config loading flows from flag to runtime"
+/oc:sessions                                          # find the session id
+/oc:spawn --continue ses_… -- "now write tests for that path"
+```
+
+Get ids from `/oc:sessions`. This maps to opencode's `--session` (resume *that
+specific* session) — distinct from opencode's bare `--continue`, which resumes
+whatever ran last.
 
 ## Configuration
 

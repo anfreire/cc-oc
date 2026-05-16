@@ -42,7 +42,15 @@ function parseNonNegativeIntFlag(value, label) {
 }
 
 function ccSessionIdFromEnv() {
-  return process.env.CC_SESSION_ID || process.env.OC_PLUGIN_SESSION_ID || null;
+  // Claude Code exposes the active session id as CLAUDE_CODE_SESSION_ID; that is
+  // what scopes /oc:sessions, /oc:tail, /oc:cancel, and the gc hook to "this CC
+  // session". CC_SESSION_ID / OC_PLUGIN_SESSION_ID remain as manual overrides.
+  return (
+    process.env.CLAUDE_CODE_SESSION_ID ||
+    process.env.CC_SESSION_ID ||
+    process.env.OC_PLUGIN_SESSION_ID ||
+    null
+  );
 }
 
 // Best-effort cancel: ask OpenCode to abort the session in its own DB first,
