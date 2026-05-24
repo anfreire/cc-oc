@@ -759,6 +759,14 @@ async function main() {
     const buf = await readArgsFromStdin();
     const { flagsRaw, promptRaw } = splitFlagsAndPrompt(buf);
     const tokens = splitRawArgumentString(flagsRaw);
+    // spawn takes a prompt body; if the user piped flag-like tokens without an
+    // explicit ` -- ` separator, parseArgs would silently consume them as flags
+    // (or throw `unknown flag`) and the user's intended prompt would be lost.
+    // Fail fast with an actionable message instead. Other subcommands take
+    // only flags / a session-id positional, so this rule is spawn-only.
+    if (sub === "spawn" && promptRaw === null && tokens.some((t) => /^--?[A-Za-z]/.test(t))) {
+      die("missing ` -- ` separator before prompt — flag-like tokens (--xyz / -x) in the prompt would be parsed as flags. Example: /oc:spawn --bg -- \"your prompt\"");
+    }
     rest = [...rest.slice(1), ...tokens];
     if (promptRaw !== null) rest.push("--", promptRaw);
   } else if (rest.includes("--prompt-stdin")) {

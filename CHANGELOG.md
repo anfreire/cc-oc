@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 — 2026-05-25
+
+Fail-fast on missing `--` separator in `/oc:spawn`.
+
+- **`/oc:spawn` now errors when the prompt would be silently mangled by flag parsing.** Previously, an invocation like `/oc:spawn review --no-pure now` (no `--` separator, `--no-pure` sitting in the would-be prompt) ran the whole stdin buffer through the flag parser, which consumed `--no-pure` as a boolean and stripped it from the prompt. The `--stdin` dispatcher now `die()`s with `missing ` -- ` separator before prompt …` when the buffer has flag-like tokens (`--xyz` / `-x`) but no `--` boundary. Spawn-only; `/oc:tail`, `/oc:sessions`, `/oc:cancel` take no prompt body and are unaffected. The bare-shorthand `/oc:spawn "just review the diff"` (no flag-like substrings) still works.
+
 ## 0.1.4 — 2026-05-24
 
 Natural-language model/provider parsing without becoming a wrapper.
