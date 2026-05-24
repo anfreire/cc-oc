@@ -44,6 +44,7 @@ After `/reload-plugins` (or on the next Claude Code session), `/oc:spawn`, `/oc:
 /oc:spawn -- "summarize the architecture of this repo"
 /oc:spawn --bg -- "find every place that calls foo() and report"
 /oc:spawn --exclude-mcp playwright -- "quick scan, no browser needed"
+/oc:spawn --provider opencode-go --model deepseek-v4-flash -- "review the diff"
 /oc:spawn --continue <id> -- "now write tests for what you found"
 /oc:tail                                 # peek at the latest job
 /oc:tail --follow                        # block until done
@@ -58,7 +59,7 @@ Append `--help` to any command for the full flag list inline.
 
 | Command | Purpose |
 |---|---|
-| `/oc:spawn` | Spawn an opencode task. Foreground by default; opencode's own permission gating applies (override with `--write`). Flags: `--bg`, `--write`, `--model`, `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--reasoning`, `--json`. Prompt after `--`. |
+| `/oc:spawn` | Spawn an opencode task. Foreground by default; opencode's own permission gating applies (override with `--write`). Flags: `--bg`, `--write`, `--provider` + `--model` (paired), `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--reasoning`, `--json`. Prompt after `--`. |
 | `/oc:tail` | Stream/peek a session's events. Flags: `--follow`, `--lines N`, `--since ms`, `--reasoning`, `--raw`, `--json`. No arg → latest active job. |
 | `/oc:sessions` | List + inspect. Flags: `--all`, `--json`. Pass a session id (or unique prefix) for full details. |
 | `/oc:cancel` | Cancel one or all. `--all` scopes to this CC session; add `--workspace` to widen. `--json` for machine-readable. |
@@ -111,7 +112,7 @@ The `$schema` URL gives you tooltips and validation in editors that understand J
 
 Any `/oc:spawn` flag overrides the user config for that single call:
 
-- `--model <id>` / `--variant <name>` / `--agent <name>` — passed through verbatim; opencode validates.
+- `--provider <name>` + `--model <id>` (paired) / `--variant <name>` / `--agent <name>` — passed through verbatim; opencode validates.
 - `--read-only` / `--write` — sandbox mode (see below).
 - `--pure` / `--no-pure` — disable / re-enable opencode's external plugins.
 - `--project` / `--no-project` — include / skip the workspace's `.opencode/` config.
@@ -127,7 +128,9 @@ Any `/oc:spawn` flag overrides the user config for that single call:
 
 ### Models
 
-Specify models as `provider/model` strings (e.g. `anthropic/claude-sonnet-4-6`, `opencode-go/deepseek-v4-flash`). opencode owns model validity — if you pass an unknown id, opencode errors and the plugin surfaces the message verbatim. There is no plugin-side model registry to keep in sync.
+Specify models as `--provider <name> --model <id>` (e.g. `--provider anthropic --model claude-sonnet-4-6`, `--provider opencode-go --model deepseek-v4-flash`). The two flags are paired — pass both or neither. cc-oc joins them server-side into the `provider/model` form opencode expects and passes the result through verbatim; **opencode owns model validity** and there is no plugin-side preflight or registry to keep in sync.
+
+When you ask Claude in natural language ("use the DeepSeek flash model from OpenCode Go"), Claude is instructed to call a built-in `oc.mjs models` diagnostic to resolve the words into a real id and confirm with you before spawning — never to guess the transformation. When opencode rejects a typo'd canonical id, Claude uses the same diagnostic to suggest alternatives. The diagnostic reads opencode's own registry: `~/.cache/opencode/models.json` (populated by running `opencode` once) plus any custom providers you've defined in `~/.config/opencode/opencode.json`.
 
 Optional `--variant <name>` is passed straight through to opencode (used by providers like `opencode-go/deepseek-v4-flash` to select reasoning effort). opencode silently ignores variants on providers that don't support them.
 
@@ -166,7 +169,7 @@ When a Claude Code session ends, the `gc` hook marks any still-running `/oc:spaw
 ## Troubleshooting
 
 - **`opencode binary not found`** — install opencode (`curl -fsSL https://opencode.ai/install | bash`) and rerun. If opencode lives somewhere non-standard, set `OPENCODE_BIN=/abs/path/to/opencode` in your shell rc so subprocess shells (including CC subagents) can find it.
-- **`UnknownError: Model not found: ...`** — opencode rejected the model id. Use a `provider/model` id opencode recognizes (run `opencode models` to list).
+- **`UnknownError: Model not found: ...`** — opencode rejected the model id. Pass `--provider <name> --model <id>` (paired) with an id opencode recognizes. Claude is instructed to run cc-oc's built-in `oc.mjs models --match <hint>` diagnostic to suggest alternatives when this fails; you can also list everything via `opencode models`.
 - **MCP server didn't load** — check whether `excludeMcps` (or `--exclude-mcp`) names it. Otherwise it's an opencode-side issue — debug with `opencode mcp list`.
 - **Background job appears "running" but is done** — call `/oc:tail` or `/oc:sessions` again. Each call reconciles by reading the log for terminal events.
 - **Stale state / disk usage** — log retention runs automatically on every CC SessionEnd (controlled by `retention.logsDays` and `retention.maxLogsMb` in `oc.json`). To force a hard wipe, `rm -rf ~/.claude/plugins/data/oc/`.

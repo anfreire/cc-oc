@@ -24,7 +24,7 @@ import {
   withLedgerLock
 } from "./lib/ledger.mjs";
 
-const SUBCMDS = new Set(["spawn", "tail", "sessions", "cancel", "gc"]);
+const SUBCMDS = new Set(["spawn", "tail", "sessions", "cancel", "gc", "models"]);
 const DONE_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function die(msg, code = 1) {
@@ -91,7 +91,8 @@ Flags:
   --read-only         Default sandbox; opencode's own permission gating applies
   --write             Pass --dangerously-skip-permissions to opencode
   --bg                Detach and return immediately
-  --model <id>        provider/model string (e.g. anthropic/claude-sonnet-4-6)
+  --provider <name>   Provider name (required with --model)
+  --model <id>        Model id (required with --provider)
   --variant <name>    Model variant (e.g. reasoning-effort tier)
   --agent <name>      Pin a specific opencode agent for this spawn
   --cwd <path>        Workspace root (default: current directory)
@@ -102,6 +103,11 @@ Flags:
   --project / --no-project  Include / skip <cwd>/.opencode/
   --reasoning         Stream thinking lines (foreground only)
   --json              Machine-readable result
+
+Recovery:
+  cc-oc does not preflight model/provider strings — opencode validates them.
+  If opencode rejects a model or provider, run \`oc.mjs models --match <hint>\`
+  (optionally with \`--provider <name>\`) to list candidate provider/model ids.
 `,
   tail: `/oc:tail [session-id] [flags]
 
@@ -125,6 +131,20 @@ Flags:
   --all         Cancel every running session in this CC session
   --workspace   Combined with --all: widen to current workspace
   --json        Machine-readable result
+`,
+  models: `oc.mjs models [flags]
+
+Diagnostic. Lists providers/models from opencode's own registry:
+  ~/.cache/opencode/models.json    (opencode-managed cache; populated by running opencode)
+  ~/.config/opencode/opencode.json (user-defined custom providers under .provider.*.models)
+
+Use this AFTER a spawn fails on an unknown model/provider — not before.
+
+  (no flags)            list providers and model counts
+  --provider <name>     list models for that provider
+  --match <hint>        rank candidates by token match (across all providers,
+                        or within --provider when both are given)
+  --json                machine-readable output
 `
 };
 
@@ -178,6 +198,7 @@ async function cmdSpawn(argv) {
     "read-only": { type: "boolean" },
     "write":     { type: "boolean" },
     "bg":        { type: "boolean" },
+    "provider":  { type: "string" },
     "model":     { type: "string" },
     "variant":   { type: "string" },
     "agent":     { type: "string" },
@@ -191,29 +212,30 @@ async function cmdSpawn(argv) {
     "reasoning": { type: "boolean" }
   });
 
+  // --provider and --model: must be specified together, combined into provider/model.
+  if (flags.provider && !flags.model) die("--provider requires --model");
+  if (flags.model && !flags.provider) die("--model requires --provider");
+  if (flags.provider && flags.model) {
+    flags.model = `${flags.provider}/${flags.model}`;
+  }
+
   const promptParts = [...positionals, ...rest];
   const prompt = promptParts.join(" ").trim();
   if (prompt === "") die("missing prompt — usage: /oc:spawn [flags] -- <prompt>");
 
-  // --reasoning is a stream-time control: there is no stream to attach it to
-  // for a detached --bg spawn. Surface the mismatch instead of dropping silently.
   if (flags.bg && flags.reasoning) {
     process.stderr.write("oc: --reasoning has no effect with --bg; pass it to /oc:tail instead.\n");
   }
 
   const env = process.env;
   const { config, rawConfig, source } = loadUserConfig({ env });
-  // Validate the raw parsed config: applyDefaults() would otherwise silently
-  // discard a non-object opencode/retention block before the validator sees it.
   const cfgValid = validateConfig(rawConfig ?? config);
   if (!cfgValid.ok) {
     die(`${source ?? "oc config"} is invalid:\n  - ${cfgValid.errors.join("\n  - ")}`);
   }
+
   const effective = applySpawnOverrides(config, flags);
   const sandbox = effective.opencode.sandbox || "read-only";
-
-  // Model + variant: pass through verbatim. opencode validates them itself —
-  // bad ids produce a hard error that we surface via the rendered error event.
 
   const bin = findOpencodeBinary({ env });
   if (!bin) die("opencode binary not found on PATH. Install it (`curl -fsSL https://opencode.ai/install | bash`) and rerun.");
@@ -519,6 +541,154 @@ async function cmdGc(argv) {
   if (flags.json) process.stdout.write(JSON.stringify({ detached, pruned }, null, 2) + "\n");
 }
 
+// ─── models (diagnostic — used to suggest alternatives after a spawn failure) ─
+// Reads opencode's own registry; never gates spawns. Unions the opencode-
+// managed cache with user-defined custom providers, matching omoctl's reader.
+async function cmdModels(argv) {
+  if (maybePrintHelp("models", argv)) return;
+  const { flags } = parseArgs(argv, {
+    "provider": { type: "string" },
+    "match":    { type: "string" },
+    "json":     { type: "boolean" }
+  });
+
+  const env = process.env;
+  const cachePath = path.join(env.HOME || "", ".cache", "opencode", "models.json");
+  const customPath = path.join(env.HOME || "", ".config", "opencode", "opencode.json");
+
+  function safeReadJson(p) {
+    try { return JSON.parse(fs.readFileSync(p, "utf8")); }
+    catch (e) {
+      if (e.code === "ENOENT") return null;
+      if (e.name === "SyntaxError") {
+        process.stderr.write(`oc: warning: ${p} is not valid JSON (${e.message}); skipping\n`);
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  const cache = safeReadJson(cachePath);
+  const custom = safeReadJson(customPath);
+  const customProviders = (custom && typeof custom === "object" && custom.provider) || {};
+
+  const providers = new Map();
+  function ensure(name) { if (!providers.has(name)) providers.set(name, new Set()); return providers.get(name); }
+  function ingest(name, modelsObj) {
+    const set = ensure(name);
+    if (modelsObj && typeof modelsObj === "object" && !Array.isArray(modelsObj)) {
+      for (const id of Object.keys(modelsObj)) set.add(id);
+    }
+  }
+  if (cache && typeof cache === "object") {
+    for (const [name, p] of Object.entries(cache)) {
+      if (p && typeof p === "object") ingest(name, p.models);
+      else ensure(name);
+    }
+  }
+  for (const [name, p] of Object.entries(customProviders)) {
+    if (p && typeof p === "object") ingest(name, p.models);
+    else ensure(name);
+  }
+
+  if (providers.size === 0) {
+    const msg = `no model registry found. Looked in:\n  ${cachePath}\n  ${customPath}\nRun \`opencode\` once to populate the cache.`;
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ providers: [], error: msg }, null, 2) + "\n");
+      process.exit(1);
+    }
+    die(msg);
+  }
+
+  function tokensOf(s) {
+    return String(s).toLowerCase().split(/[-_/\s.]+/).filter(Boolean);
+  }
+  function scoreOf(hintTokens, candidate) {
+    const ct = tokensOf(candidate);
+    let s = 0;
+    for (const h of hintTokens) {
+      if (ct.includes(h)) s += 1.0;
+      else if (ct.some((t) => t.length >= 2 && (t.includes(h) || h.includes(t)))) s += 0.5;
+    }
+    return s;
+  }
+
+  const hintTokens = flags.match ? tokensOf(flags.match) : null;
+
+  if (flags.provider) {
+    const prov = flags.provider;
+    if (!providers.has(prov)) {
+      const all = [...providers.keys()].sort();
+      // Score against the typed-but-unknown provider name (typo fix), and also
+      // against --match if given (catches "wrong provider with right model hint").
+      const provTokens = tokensOf(prov);
+      const suggestion = all
+        .map((p) => {
+          const nameScore = scoreOf(provTokens, p);
+          const modelScore = hintTokens
+            ? Math.max(0, ...[...providers.get(p)].map((id) => scoreOf(hintTokens, id)))
+            : 0;
+          return [p, nameScore * 2 + modelScore];
+        })
+        .filter(([, s]) => s > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([p]) => p)
+        .slice(0, 5);
+      if (flags.json) {
+        process.stdout.write(JSON.stringify({ error: `unknown provider "${prov}"`, providers: all, closest: suggestion }, null, 2) + "\n");
+        process.exit(1);
+      }
+      const tail = suggestion.length ? `\nClosest match: ${suggestion.join(", ")}` : "";
+      die(`unknown provider "${prov}". Available:\n  ${all.join("\n  ")}${tail}`);
+    }
+    const ids = [...providers.get(prov)].sort();
+    let ranked = ids;
+    if (hintTokens) {
+      const scored = ids
+        .map((id) => ({ id, score: scoreOf(hintTokens, id) }))
+        .filter((r) => r.score > 0)
+        .sort((a, b) => b.score - a.score || a.id.length - b.id.length);
+      if (scored.length > 0) ranked = scored.map((r) => r.id);
+    }
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ provider: prov, models: ranked }, null, 2) + "\n");
+      return;
+    }
+    for (const id of ranked) process.stdout.write(`${prov}/${id}\n`);
+    return;
+  }
+
+  if (hintTokens) {
+    const all = [];
+    for (const [name, set] of providers) {
+      for (const id of set) {
+        const combined = `${name}/${id}`;
+        all.push({ providerModel: combined, score: scoreOf(hintTokens, combined) });
+      }
+    }
+    const ranked = all
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score || a.providerModel.length - b.providerModel.length)
+      .slice(0, 20);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ match: flags.match, candidates: ranked.map((r) => r.providerModel) }, null, 2) + "\n");
+      return;
+    }
+    if (ranked.length === 0) die(`no models match "${flags.match}"`);
+    for (const r of ranked) process.stdout.write(`${r.providerModel}\n`);
+    return;
+  }
+
+  const out = [...providers.entries()]
+    .map(([name, set]) => ({ provider: name, model_count: set.size }))
+    .sort((a, b) => a.provider.localeCompare(b.provider));
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+    return;
+  }
+  for (const r of out) process.stdout.write(`${r.provider.padEnd(28)} ${r.model_count}\n`);
+}
+
 // Read raw args from stdin (used by slash command wrappers to avoid shell
 // interpolation of $ARGUMENTS). Returns the whole buffer.
 async function readArgsFromStdin() {
@@ -567,7 +737,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const sub = argv[0];
   if (!sub || sub === "--help" || sub === "-h") {
-    process.stdout.write(`oc <subcommand> [args]\n\nSubcommands:\n  spawn     spawn an OpenCode task (foreground; --bg for background)\n  tail      stream/peek a session's progress\n  sessions  list/inspect spawned sessions\n  cancel    cancel one or all running sessions\n`);
+    process.stdout.write(`oc <subcommand> [args]\n\nSubcommands:\n  spawn     spawn an OpenCode task (foreground; --bg for background)\n  tail      stream/peek a session's progress\n  sessions  list/inspect spawned sessions\n  cancel    cancel one or all running sessions\n  models    list providers/models (diagnostic; suggests alternatives after a failed spawn)\n`);
     return;
   }
   if (!SUBCMDS.has(sub)) die(`unknown subcommand: ${sub}`);
@@ -603,6 +773,7 @@ async function main() {
     else if (sub === "sessions") await cmdSessions(rest);
     else if (sub === "cancel")  await cmdCancel(rest);
     else if (sub === "gc")      await cmdGc(rest);
+    else if (sub === "models")  await cmdModels(rest);
   } catch (e) {
     die(e.message || String(e));
   }

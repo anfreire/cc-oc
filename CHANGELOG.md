@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4 — 2026-05-24
+
+Natural-language model/provider parsing without becoming a wrapper.
+
+- **`--provider` + `--model` split.** `/oc:spawn` previously took the combined `provider/model` form via a single `--model`. The two are now separate flags and paired (pass both or neither); cc-oc joins them server-side into the `provider/model` string opencode expects. This makes Claude's natural-language → flag translation cleaner — "use X from Y" maps to `--provider Y --model X`.
+- **New `oc.mjs models` diagnostic subcommand.** Lists providers and models from opencode's own registry: `~/.cache/opencode/models.json` ∪ `~/.config/opencode/opencode.json::provider.*.models` (user-defined custom providers are included). Four call shapes — bare (provider list with counts), `--provider X` (X's models), `--match Y` (token-ranked candidates across all providers), `--provider X --match Y` (ranked within X) — plus `--json`. Unknown providers under `--provider` print up to 5 closest matches scored against the typed name + the optional model hint. `models` is a subcommand only — there is no `/oc:models` slash command — and is invoked by Claude in exactly two situations: *before* a spawn when the user wrote the model or provider with whitespace ("DeepSeek V4 Flash" — natural-language hint, never guess the transformation), and *after* a spawn that opencode rejected on an unknown model/provider (typo recovery).
+- **`spawn.md` rewritten** with a natural-language → flag table, the whitespace-decides rule for model/provider values, and an explicit recovery procedure. No-whitespace values are always passed through verbatim; cc-oc does not preflight.
+
 ## 0.1.3 — 2026-05-16
 
 Session-scoping fix and resume documentation.
