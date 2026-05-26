@@ -9,24 +9,33 @@
 //     version: 1,
 //     sessions: [
 //       {
-//         sessionId,        // OpenCode session ID (from session.created event)
+//         sessionId,        // OpenCode session ID (from session.created event);
+//                           // initially the synthetic `_pending_<…>` id assigned
+//                           // by startSpawn
+//         pendingId,        // after migration: the original `_pending_<…>` id,
+//                           // preserved so recovery commands quoted in the
+//                           // started-session block stay valid post-migration
+//                           // (findSession matches it)
+//         pending,          // true between spawn and first observed sessionID,
+//                           // false once resolvePendingSession migrates the entry
 //         ccSessionId,      // Claude Code session id (best effort, may be null)
 //         workspace,        // resolved cwd
 //         status,           // queued|running|completed|failed|cancelled|detached
-//         jobClass,         // "fg" | "bg"
 //         model,
 //         agent,
 //         sandbox,
 //         configDir,        // per-spawn OPENCODE_CONFIG_DIR if any (null when no overrides)
 //         logFile,
-//         pid,              // background only
+//         pid,              // the opencode child's pid
 //         prompt,
 //         promptSummary,
 //         startedAt,        // ISO
 //         updatedAt,
 //         completedAt,
 //         exitCode,
-//         lastAssistantText
+//         lastAssistantText,
+//         errorMessage      // set by reconcileSessionState when the child exited
+//                           // before producing any events (no log file)
 //       }
 //     ]
 //   }
@@ -146,12 +155,29 @@ export function upsertSession(record, env = process.env) {
 
 export function findSession(sessionIdOrPrefix, env = process.env) {
   const idx = loadIndex(env);
-  const exact = idx.sessions.find((s) => s.sessionId === sessionIdOrPrefix);
-  if (exact) return exact;
-  const candidates = idx.sessions.filter((s) => s.sessionId.startsWith(sessionIdOrPrefix));
-  if (candidates.length === 1) return candidates[0];
-  if (candidates.length === 0) return null;
-  throw new Error(`ambiguous session id "${sessionIdOrPrefix}" matches ${candidates.length} sessions`);
+  // Exact match on sessionId first, then on the preserved pendingId.
+  // After resolvePendingSession migrates a pending entry to its real opencode
+  // session id, the original pending id is kept in a `pendingId` field so
+  // that any command using the id printed in the started-session block still
+  // resolves to the migrated entry. Without this, `/oc:cancel <pendingId>`
+  // (printed in the started block) would return not-found after the first
+  // `/oc:tail` migrated the row.
+  const exactSid = idx.sessions.find((s) => s.sessionId === sessionIdOrPrefix);
+  if (exactSid) return exactSid;
+  const exactPending = idx.sessions.find((s) => s.pendingId === sessionIdOrPrefix);
+  if (exactPending) return exactPending;
+  // Prefix match: same precedence — sessionId first, then pendingId.
+  const sidCandidates = idx.sessions.filter((s) => s.sessionId.startsWith(sessionIdOrPrefix));
+  if (sidCandidates.length === 1) return sidCandidates[0];
+  if (sidCandidates.length > 1) {
+    throw new Error(`ambiguous session id "${sessionIdOrPrefix}" matches ${sidCandidates.length} sessions`);
+  }
+  const pendingCandidates = idx.sessions.filter((s) => s.pendingId && s.pendingId.startsWith(sessionIdOrPrefix));
+  if (pendingCandidates.length === 1) return pendingCandidates[0];
+  if (pendingCandidates.length > 1) {
+    throw new Error(`ambiguous pending id "${sessionIdOrPrefix}" matches ${pendingCandidates.length} sessions`);
+  }
+  return null;
 }
 
 export function listSessions({ ccSessionId = null, workspace = null, statuses = null, all = false } = {}, env = process.env) {

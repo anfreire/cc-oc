@@ -1,5 +1,5 @@
 {
-  "description": "Mark background jobs as detached on CC session end and prune old logs.",
+  "description": "On CC session end: mark every still-running cc-oc session in this CC session as detached, then prune old logs and per-spawn run dirs.",
   "hooks": {
     "SessionEnd": [
       {
@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs\" gc --session-id \"${CC_SESSION_ID:-$session_id}\"",
-            "timeout": 8
+            "timeout": 20
           }
         ]
       }

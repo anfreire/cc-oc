@@ -21,7 +21,7 @@ import path from "node:path";
 
 import { pluginDataRoot } from "./paths.mjs";
 
-export function runsDir(env = process.env) {
+function runsDir(env = process.env) {
   return path.join(pluginDataRoot(env), "runs");
 }
 

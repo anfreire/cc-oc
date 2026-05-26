@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Main dispatcher for the oc plugin. Subcommands: spawn | tail | sessions | cancel | gc
+// Main dispatcher for the oc plugin.
+// Subcommands: spawn | tail | sessions | cancel | gc | models | agents
 
 import fs from "node:fs";
 import path from "node:path";
@@ -9,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { parseArgs, splitCsv } from "./lib/args.mjs";
 import { loadUserConfig, validateConfig } from "./lib/config.mjs";
 import { buildConfigDir } from "./lib/builder.mjs";
-import { runForeground, runBackground, resolvePendingSession, reconcileSessionState } from "./lib/spawn.mjs";
+import { startSpawn, resolvePendingSession, reconcileSessionState } from "./lib/spawn.mjs";
 import { readDigest, followLog } from "./lib/tail.mjs";
 import { findOpencodeBinary } from "./lib/opencode-bin.mjs";
 import {
@@ -24,7 +25,7 @@ import {
   withLedgerLock
 } from "./lib/ledger.mjs";
 
-const SUBCMDS = new Set(["spawn", "tail", "sessions", "cancel", "gc", "models"]);
+const SUBCMDS = new Set(["spawn", "tail", "sessions", "cancel", "gc", "models", "agents"]);
 const DONE_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function die(msg, code = 1) {
@@ -66,9 +67,14 @@ function cancelSession(rec, env) {
     }
   }
   if (rec.pid) {
-    try { process.kill(rec.pid, "SIGTERM"); } catch { /* may already be dead */ }
+    // Signal the whole process group, not just the leader. `startSpawn` runs
+    // opencode with `detached: true` so it sits as the leader of its own
+    // session/group; `process.kill(-pid, …)` reaches any MCP-server / tool
+    // subprocesses opencode forked. `process.kill(pid, …)` would only hit
+    // the leader and orphan the rest.
+    try { process.kill(-rec.pid, "SIGTERM"); } catch { /* may already be dead */ }
   }
-  // pending: false matters here — without it, a bg entry's pending=true would
+  // pending: false matters here — without it, an entry's pending=true would
   // make reconcileSessionState consider this record "active" and overwrite
   // status="cancelled" with "completed" the moment a step_finish event lands
   // in the log (which can happen if opencode finishes its work the same
@@ -93,10 +99,15 @@ argv carries flags only. The prompt body is read from stdin (always required).
 There is no ` + "`--`" + ` separator and no flag for stdin; piping a prompt body in
 is the only way to pass one.
 
+Spawn always runs detached. cc-oc starts opencode, prints a started-session
+block with the pid and pending session id, then exits — opencode continues in
+its own process group, writing NDJSON events to the per-session log file. To
+wait for opencode to finish, run \`/oc:tail <id> --follow\`; to peek at progress,
+\`/oc:tail <id>\`; to abort, \`/oc:cancel <id>\`.
+
 Flags:
   --read-only         Default sandbox; opencode's own permission gating applies
   --write             Pass --dangerously-skip-permissions to opencode
-  --bg                Detach and return immediately
   --provider <name>   Provider name (required with --model)
   --model <id>        Model id (required with --provider)
   --variant <name>    Model variant (e.g. reasoning-effort tier)
@@ -107,13 +118,17 @@ Flags:
   --include-mcp <csv> Re-enable these (escape hatch for globally-excluded servers)
   --pure / --no-pure  Skip / include opencode's external plugins
   --project / --no-project  Include / skip <cwd>/.opencode/
-  --reasoning         Stream thinking lines (foreground only)
-  --json              Machine-readable result
+  --json              Machine-readable started-session block
 
 Recovery:
-  cc-oc does not preflight model/provider strings — opencode validates them.
-  If opencode rejects a model or provider, run \`oc.mjs models --match <hint>\`
-  (optionally with \`--provider <name>\`) to list candidate provider/model ids.
+  cc-oc does not preflight model / provider / agent strings — opencode
+  validates them. After a spawn fails on an unknown one, run the matching
+  diagnostic to list candidates (always quote multi-word values):
+    oc.mjs models --match "<hint>"            (search models across providers)
+    oc.mjs models --provider "<name>"         (list one provider's models)
+    oc.mjs models --provider "<name>" --match "<hint>"   (ranked within provider)
+    oc.mjs agents --match "<hint>"            (rank agents by hint)
+    oc.mjs agents                             (bare list of all agents)
 `,
   tail: `/oc:tail [session-id] [flags]
 
@@ -144,13 +159,32 @@ Diagnostic. Lists providers/models from opencode's own registry:
   ~/.cache/opencode/models.json    (opencode-managed cache; populated by running opencode)
   ~/.config/opencode/opencode.json (user-defined custom providers under .provider.*.models)
 
-Use this AFTER a spawn fails on an unknown model/provider — not before.
+Two use cases (both Claude-facing — do not invoke this on every spawn):
+  - BEFORE spawning, when the user wrote the model or provider with whitespace
+    ("the DeepSeek flash model") — translate the natural-language hint into a
+    real id with --match, confirm with the user, then spawn.
+  - AFTER a spawn fails on an unknown model or provider (typo recovery).
+  For no-whitespace canonical ids, NEVER preflight; pass through verbatim.
 
   (no flags)            list providers and model counts
   --provider <name>     list models for that provider
   --match <hint>        rank candidates by token match (across all providers,
                         or within --provider when both are given)
   --json                machine-readable output
+`,
+  agents: `oc.mjs agents [flags]
+
+Diagnostic. Lists opencode-resolved agents (built-ins, global config, project
+config, plugin packages — all merged by opencode itself). cc-oc shells out to
+\`opencode agent list\` and re-emits just the name + kind per line, stripping
+the permission JSON noise.
+
+Use this when the user named an agent with whitespace (natural-language hint)
+or when opencode rejected a no-whitespace agent name (typo recovery).
+
+  (no flags)        list all agents alphabetically, with kind
+  --match <hint>    rank agents by token match against the hint
+  --json            machine-readable output
 `
 };
 
@@ -203,7 +237,6 @@ async function cmdSpawn(argv, prompt) {
   const { flags, positionals, rest } = parseArgs(argv, {
     "read-only": { type: "boolean" },
     "write":     { type: "boolean" },
-    "bg":        { type: "boolean" },
     "provider":  { type: "string" },
     "model":     { type: "string" },
     "variant":   { type: "string" },
@@ -214,30 +247,37 @@ async function cmdSpawn(argv, prompt) {
     "include-mcp": { type: "string" },
     "pure":      { type: "boolean" },
     "project":   { type: "boolean" },
-    "json":      { type: "boolean" },
-    "reasoning": { type: "boolean" }
+    "json":      { type: "boolean" }
   });
 
   // argv carries flags only. Any leftover token means the caller mixed the
   // prompt into argv — most likely an old-shape invocation from before v0.2.0,
-  // when ` -- ` separated flags from prompt. Point at the new shape rather than
-  // silently joining tokens.
+  // when ` -- ` separated flags from prompt. Point at the new shape rather
+  // than silently joining tokens.
   const stray = [...positionals, ...rest];
   if (stray.length) {
     die(`unexpected argv token(s) after flags: ${JSON.stringify(stray.join(" "))} — argv carries flags only; pipe the prompt body on stdin: \`oc.mjs spawn [flags] <<EOF\\n<prompt>\\nEOF\``);
   }
 
+  // Reject empty-string AND whitespace-only values for ANY string-valued
+  // flag. parseArgs allows `--flag=` (empty value) and `--flag "   "`
+  // (whitespace), and downstream truthy / non-empty-only checks would
+  // otherwise let those fall through to the configured default — silently
+  // ignoring the user's intent to override. Centralised here so every
+  // string flag is covered identically.
+  const STRING_FLAGS = ["provider", "model", "variant", "agent", "cwd", "continue", "exclude-mcp", "include-mcp"];
+  for (const f of STRING_FLAGS) {
+    const v = flags[f];
+    if (v === undefined) continue;
+    if (typeof v !== "string" || v.trim() === "") {
+      die(`--${f} value must be a non-empty string`);
+    }
+  }
+
   // --provider and --model: must be specified together, combined into provider/model.
-  // Reject empty strings explicitly — `--provider= --model=` would otherwise
-  // pass both truthy checks (both falsy → no pairing error fires → spawn
-  // silently falls back to the configured default model).
-  const hasProvider = typeof flags.provider === "string" && flags.provider !== "";
-  const hasModel    = typeof flags.model    === "string" && flags.model    !== "";
-  if (flags.provider !== undefined && !hasProvider) die("--provider value must be non-empty");
-  if (flags.model    !== undefined && !hasModel)    die("--model value must be non-empty");
-  if (hasProvider && !hasModel) die("--provider requires --model");
-  if (hasModel && !hasProvider) die("--model requires --provider");
-  if (hasProvider && hasModel) {
+  if (flags.provider && !flags.model) die("--provider requires --model");
+  if (flags.model && !flags.provider) die("--model requires --provider");
+  if (flags.provider && flags.model) {
     flags.model = `${flags.provider}/${flags.model}`;
   }
 
@@ -245,10 +285,6 @@ async function cmdSpawn(argv, prompt) {
     die("missing prompt — spawn reads the prompt body from stdin: `oc.mjs spawn [flags] <<EOF\\n<prompt>\\nEOF`");
   }
   const promptBody = prompt.replace(/\n+$/, "");
-
-  if (flags.bg && flags.reasoning) {
-    process.stderr.write("oc: --reasoning has no effect with --bg; pass it to /oc:tail instead.\n");
-  }
 
   const env = process.env;
   const { config, rawConfig, source } = loadUserConfig({ env });
@@ -273,7 +309,11 @@ async function cmdSpawn(argv, prompt) {
   }
   const built = buildConfigDir({ config: effective, env });
 
-  const common = {
+  // Start opencode detached and return immediately. cc-oc awaits only the
+  // child's `spawn` (success) or `error` (ENOENT/EPERM/etc.) event, then
+  // unrefs and resolves; opencode continues writing NDJSON events to the
+  // log file long after cc-oc has exited.
+  const result = await startSpawn({
     binary: bin,
     prompt: promptBody,
     configDir: built.configDir,
@@ -287,43 +327,73 @@ async function cmdSpawn(argv, prompt) {
     ccSessionId: ccSessionIdFromEnv(),
     env,
     disableProjectConfig: Boolean(effective.opencode.disableProjectConfig)
-  };
+  });
 
-  if (flags.bg) {
-    const r = await runBackground(common);
-    const out = {
-      jobClass: "bg",
-      pid: r.pid,
-      pendingId: r.pendingId,
-      pendingLog: r.pendingLog,
-      configDir: r.configDir,
-      hint: "Use /oc:tail to follow progress; /oc:sessions to list."
-    };
-    if (flags.json) process.stdout.write(JSON.stringify(out, null, 2) + "\n");
-    else {
-      process.stdout.write(`Started background OpenCode job (pid ${r.pid}).\n`);
-      process.stdout.write(`Tail with: /oc:tail\n`);
+  if (result.spawnError) {
+    const code = result.spawnError.code || result.spawnError.message || String(result.spawnError);
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({
+        started: false,
+        spawnError: code,
+        pendingId: result.pendingId,
+        pendingLog: result.pendingLog
+      }, null, 2) + "\n");
+    } else {
+      process.stderr.write(`oc: opencode child failed to start: ${code}\n`);
+      process.stderr.write(`    See pending log for the SpawnError event: ${result.pendingLog}\n`);
     }
-    return;
+    process.exit(1);
   }
 
-  // For --json, suppress streaming digest — emit only the final JSON envelope.
-  const fgOpts = { ...common, jobClass: "fg", reasoning: Boolean(flags.reasoning) };
-  if (flags.json) fgOpts.onDigest = () => { /* drop */ };
+  // Emit the started-session block and exit. The bash call returns; opencode
+  // runs detached. Whether the caller waits for the result, peeks, or moves
+  // on is their choice — the four /oc:* commands below are the entire
+  // interface.
+  const { pid, pendingId, pendingLog, configDir } = result;
+  const tailRef     = `/oc:tail ${pendingId}`;
+  const followRef   = `/oc:tail ${pendingId} --follow`;
+  const cancelRef   = `/oc:cancel ${pendingId}`;
+  const sessionsRef = `/oc:sessions ${pendingId}`;
+  const guidance = [
+    "opencode is running detached; cc-oc has exited and the child continues",
+    "in its own process group, writing NDJSON events to the log above.",
+    "",
+    "Next:",
+    `  ${tailRef}              peek at the current digest`,
+    `  ${followRef}     block until opencode finishes (max 15 min)`,
+    `  ${cancelRef}             abort the session`,
+    `  ${sessionsRef}          full status snapshot`,
+    "",
+    `If the user asked for the result, follow with \`${followRef}\` now.`,
+    "If they kicked off and moved on, end your turn — the log persists and",
+    `they can pull it any time with \`${tailRef}\`.`,
+    "",
+    "The id above stays valid for the lifetime of the ledger entry — even",
+    "after the ledger migrates from the pending id to the real opencode",
+    "session id, both ids resolve to the same record."
+  ].join("\n");
 
-  const r = await runForeground(fgOpts);
   if (flags.json) {
     process.stdout.write(JSON.stringify({
-      sessionId: r.sessionId,
-      exitCode: r.exitCode,
-      lastAssistantText: r.lastAssistantText,
-      logFile: r.logFile,
-      configDir: r.configDir
+      started: true,
+      pid,
+      pendingId,
+      pendingLog,
+      configDir,
+      next: {
+        tail: tailRef,
+        follow: followRef,
+        cancel: cancelRef,
+        sessions: sessionsRef
+      }
     }, null, 2) + "\n");
-  } else if (r.lastAssistantText) {
-    process.stdout.write(`\n${r.lastAssistantText}\n`);
+  } else {
+    process.stdout.write(`Started OpenCode session.\n`);
+    process.stdout.write(`  pid:     ${pid}\n`);
+    process.stdout.write(`  session: ${pendingId}\n`);
+    process.stdout.write(`  log:     ${pendingLog}\n`);
+    process.stdout.write(`\n${guidance}\n`);
   }
-  process.exit(r.exitCode || 0);
 }
 
 // ─── tail ───────────────────────────────────────────────────────────────────
@@ -337,6 +407,9 @@ async function cmdTail(argv) {
     "raw":       { type: "boolean" },
     "json":      { type: "boolean" }
   });
+  if (positionals.length > 1) {
+    die(`unexpected extra token(s) after session id: ${JSON.stringify(positionals.slice(1).join(" "))} — tail accepts at most one session id`);
+  }
 
   const env = process.env;
   const arg = positionals[0];
@@ -349,7 +422,7 @@ async function cmdTail(argv) {
     if (!record) die("no active session in this workspace. Pass a session id or start one with /oc:spawn.");
   }
 
-  // If background and still pending (no sessionId observed yet), try to migrate.
+  // If still pending (no sessionId observed yet), try to migrate.
   if (record.pending) {
     const resolved = resolvePendingSession(record, env);
     if (resolved) record = findSession(resolved, env) ?? record;
@@ -385,14 +458,45 @@ async function cmdTail(argv) {
   }
 
   if (flags.follow) {
+    // Already terminal — short-circuit. Emit the final state in the form
+    // the caller asked for (digest by default, JSON envelope under --json).
     if (DONE_STATUSES.has(record.status)) {
-      const { digest } = readDigest(logFile, { lines: null, since: null, reasoning: Boolean(flags.reasoning) });
-      process.stdout.write(digest);
-      if (digest && !digest.endsWith("\n")) process.stdout.write("\n");
+      const { digest, eventCount } = readDigest(logFile, { lines: null, since: null, reasoning: Boolean(flags.reasoning) });
+      if (flags.json) {
+        process.stdout.write(JSON.stringify({
+          sessionId: record.sessionId,
+          status: record.status,
+          eventCount,
+          terminal: true,
+          digest
+        }, null, 2) + "\n");
+      } else {
+        process.stdout.write(digest);
+        if (digest && !digest.endsWith("\n")) process.stdout.write("\n");
+      }
       return;
     }
-    const result = await followLog(logFile, { reasoning: Boolean(flags.reasoning) });
+    // Live follow. Under --json, suppress per-line streaming via an onLine
+    // sink so the final envelope is the only thing on stdout.
+    const result = await followLog(logFile, {
+      reasoning: Boolean(flags.reasoning),
+      onLine: flags.json ? () => { /* drop */ } : null
+    });
     if (result.timedOut) die(`tail timed out after 15 min`);
+    // The log now contains terminal events. Re-reconcile so the ledger
+    // status reflects completed / failed before we return (and so a later
+    // /oc:sessions on the same record reports the right state).
+    record = reconcileSessionState(record, env);
+    if (flags.json) {
+      const { digest, eventCount } = readDigest(logFile, { lines: null, since: null, reasoning: Boolean(flags.reasoning) });
+      process.stdout.write(JSON.stringify({
+        sessionId: record.sessionId,
+        status: record.status,
+        eventCount,
+        terminal: true,
+        digest
+      }, null, 2) + "\n");
+    }
     return;
   }
 
@@ -424,13 +528,26 @@ async function cmdSessions(argv) {
     "all":  { type: "boolean" },
     "json": { type: "boolean" }
   });
+  if (positionals.length > 1) {
+    die(`unexpected extra token(s) after session id: ${JSON.stringify(positionals.slice(1).join(" "))} — sessions accepts at most one session id`);
+  }
 
   const env = process.env;
   const cc = ccSessionIdFromEnv();
 
   if (positionals[0]) {
-    const rec = findSession(positionals[0], env);
+    let rec = findSession(positionals[0], env);
     if (!rec) die(`no session "${positionals[0]}"`);
+    // Resolve a still-pending id to its real opencode session id (if the
+    // log has the first session event), then reconcile so the status field
+    // reflects what the log actually shows. Without this, /oc:sessions <id>
+    // returned a stale `running` / pending row for a job that had long
+    // finished — the list path reconciles, but the single-id lookup didn't.
+    if (rec.pending) {
+      const resolved = resolvePendingSession(rec, env);
+      if (resolved) rec = findSession(resolved, env) ?? rec;
+    }
+    rec = reconcileSessionState(rec, env);
     process.stdout.write(JSON.stringify(rec, null, 2) + "\n");
     return;
   }
@@ -446,13 +563,13 @@ async function cmdSessions(argv) {
       : { ccSessionId: cc, workspace: process.cwd() },
     env
   );
-  // Reconcile: any background-spawned entry that still says running may actually be done.
+  // Reconcile: any entry that still says running may actually be done.
   const sessions = rawSessions.map((s) => reconcileSessionState(s, env));
   if (flags.json) { process.stdout.write(JSON.stringify(sessions, null, 2) + "\n"); return; }
 
   if (sessions.length === 0) { process.stdout.write("(no sessions)\n"); return; }
   for (const s of sessions) {
-    process.stdout.write(`${s.sessionId}  [${s.jobClass}/${s.status}]  ${s.promptSummary}\n`);
+    process.stdout.write(`${s.sessionId}  [${s.status}]  ${s.promptSummary}\n`);
   }
 }
 
@@ -464,6 +581,9 @@ async function cmdCancel(argv) {
     "workspace": { type: "boolean" },
     "json":      { type: "boolean" }
   });
+  if (positionals.length > 1) {
+    die(`unexpected extra token(s) after session id: ${JSON.stringify(positionals.slice(1).join(" "))} — cancel accepts at most one session id (use --all to cancel multiple)`);
+  }
 
   const env = process.env;
   const cc = ccSessionIdFromEnv();
@@ -507,6 +627,37 @@ async function cmdGc(argv) {
   });
   const env = process.env;
   const ccSession = flags["session-id"] || ccSessionIdFromEnv();
+  // Reconcile candidates BEFORE marking them detached. `detached` is terminal
+  // (see TERMINAL_STATUSES in lib/spawn.mjs), so blindly flipping every
+  // `running`/`queued` row to `detached` would freeze a job whose log already
+  // shows `session_idle` / `step_finish` (a normally-completed run whose
+  // in-process reconcile happened to miss it) into the wrong final status —
+  // future /oc:tail calls would no longer transition it to `completed`. The
+  // reconcile pass is done OUTSIDE the lock below because
+  // reconcileSessionState takes the ledger lock internally per update;
+  // nesting would deadlock. The CC session is ending, so no concurrent
+  // /oc:spawn from this session can introduce new records in the window
+  // between reconcile and detach-mark.
+  if (ccSession) {
+    const idx0 = loadIndex(env);
+    const candidates = idx0.sessions.filter(
+      (s) => s.ccSessionId === ccSession && (s.status === "running" || s.status === "queued")
+    );
+    for (const c of candidates) {
+      try {
+        let rec = c;
+        if (rec.pending) {
+          const resolved = resolvePendingSession(rec, env);
+          if (resolved) rec = findSession(resolved, env) ?? rec;
+        }
+        reconcileSessionState(rec, env);
+      } catch {
+        // Best effort — if reconcile fails, the detach pass below will still
+        // catch this entry. We just won't have transitioned it to completed.
+      }
+    }
+  }
+
   // Ledger mutation is wrapped in the ledger lock so that a concurrent
   // /oc:spawn from a freshly-started next CC session can't race the
   // detach-mark + save.
@@ -567,13 +718,49 @@ async function cmdGc(argv) {
 // ─── models (diagnostic — used to suggest alternatives after a spawn failure) ─
 // Reads opencode's own registry; never gates spawns. Unions the opencode-
 // managed cache with user-defined custom providers, matching omoctl's reader.
+// Shared token-similarity scoring used by `models` and `agents` diagnostics.
+// Splits on `-_/\s.` so e.g. "deepseek-v4-flash" → ["deepseek","v4","flash"] and
+// "build_agent" → ["build","agent"]. Each hint token contributes 1.0 for an
+// exact token match, 0.5 for a substring overlap — but ONLY when both the hint
+// token and the candidate token are ≥ 2 chars. Without the hint-length guard,
+// a one-letter hint like `a` would score 0.5 against every candidate containing
+// the letter, drowning real matches in noise.
+function tokensOf(s) {
+  return String(s).toLowerCase().split(/[-_/\s.]+/).filter(Boolean);
+}
+function scoreOf(hintTokens, candidate) {
+  const ct = tokensOf(candidate);
+  let s = 0;
+  for (const h of hintTokens) {
+    if (ct.includes(h)) s += 1.0;
+    else if (h.length >= 2 && ct.some((t) => t.length >= 2 && (t.includes(h) || h.includes(t)))) s += 0.5;
+  }
+  return s;
+}
+
 async function cmdModels(argv) {
   if (maybePrintHelp("models", argv)) return;
-  const { flags } = parseArgs(argv, {
+  const { flags, positionals, rest } = parseArgs(argv, {
     "provider": { type: "string" },
     "match":    { type: "string" },
     "json":     { type: "boolean" }
   });
+  // Reject stray tokens. A multi-word hint must be quoted (`models --match
+  // "deep seek"`); without this guard, the second and later words become
+  // positionals and are silently dropped.
+  const stray = [...positionals, ...rest];
+  if (stray.length) {
+    die(`unexpected token(s): ${JSON.stringify(stray.join(" "))} — pass multi-word values in quotes: models --match "<hint>"`);
+  }
+  // Reject empty-string AND whitespace-only values. `--match=` or
+  // `--match "   "` would otherwise fall through to the bare-list path
+  // (truthy check via the existing `flags.match ? …` later), silently
+  // doing nothing the caller asked for. Same for `--provider=`.
+  for (const f of ["provider", "match"]) {
+    if (flags[f] !== undefined && (typeof flags[f] !== "string" || flags[f].trim() === "")) {
+      die(`--${f} value must be a non-empty string`);
+    }
+  }
 
   const env = process.env;
   const cachePath = path.join(env.HOME || "", ".cache", "opencode", "models.json");
@@ -621,19 +808,6 @@ async function cmdModels(argv) {
       process.exit(1);
     }
     die(msg);
-  }
-
-  function tokensOf(s) {
-    return String(s).toLowerCase().split(/[-_/\s.]+/).filter(Boolean);
-  }
-  function scoreOf(hintTokens, candidate) {
-    const ct = tokensOf(candidate);
-    let s = 0;
-    for (const h of hintTokens) {
-      if (ct.includes(h)) s += 1.0;
-      else if (ct.some((t) => t.length >= 2 && (t.includes(h) || h.includes(t)))) s += 0.5;
-    }
-    return s;
   }
 
   const hintTokens = flags.match ? tokensOf(flags.match) : null;
@@ -712,6 +886,99 @@ async function cmdModels(argv) {
   for (const r of out) process.stdout.write(`${r.provider.padEnd(28)} ${r.model_count}\n`);
 }
 
+// ─── agents ─────────────────────────────────────────────────────────────────
+// Diagnostic. Lists opencode-resolved agents (built-ins + global config +
+// project config + plugin packages, all merged by opencode). We don't re-read
+// any of those sources ourselves — opencode owns agent resolution, we just
+// shell out to `opencode agent list` and re-emit the names + kinds in a shape
+// Claude can scan cheaply (no per-agent permission JSON noise). Called by
+// Claude in the same two situations as `models`: BEFORE spawning when the
+// user wrote the agent name with whitespace (natural-language hint), and
+// AFTER spawning when opencode rejected an unknown agent (typo recovery).
+async function cmdAgents(argv) {
+  if (maybePrintHelp("agents", argv)) return;
+  const { flags, positionals, rest } = parseArgs(argv, {
+    "match": { type: "string" },
+    "json":  { type: "boolean" }
+  });
+  // Reject stray tokens. A multi-word hint must be quoted (`agents --match
+  // "build agent"`); without this guard, the second and later words get
+  // silently dropped as positionals.
+  const stray = [...positionals, ...rest];
+  if (stray.length) {
+    die(`unexpected token(s): ${JSON.stringify(stray.join(" "))} — pass multi-word hints in quotes: agents --match "<hint>"`);
+  }
+  // Reject `--match=` (empty) AND `--match "   "` (whitespace-only).
+  // Fallthrough would silently behave like bare `agents`, hiding the
+  // user's filter intent.
+  if (flags.match !== undefined && (typeof flags.match !== "string" || flags.match.trim() === "")) {
+    die("--match value must be a non-empty string");
+  }
+
+  const env = process.env;
+  const bin = findOpencodeBinary({ env });
+  if (!bin) die("opencode binary not found on PATH. Install it (`curl -fsSL https://opencode.ai/install | bash`) and rerun.");
+
+  const r = spawnSync(bin, ["agent", "list"], { env, encoding: "utf8", timeout: 10000 });
+  if (r.error) {
+    // spawnSync itself failed (e.g. ETIMEDOUT, EAGAIN, max-buffer exceeded).
+    // r.status is null in this case; surface the error code/message so the
+    // caller has something to act on instead of an empty "exit null" line.
+    die(`opencode agent list could not run: ${r.error.code || r.error.message || String(r.error)}`);
+  }
+  if (r.status !== 0) {
+    const stderr = (r.stderr || "").trim();
+    die(`opencode agent list failed (exit ${r.status})${stderr ? `: ${stderr}` : ""}`);
+  }
+
+  // `opencode agent list` emits, per agent, a header line `<name> (kind)` at
+  // column 1 followed by an indented JSON permission block. Headers are the
+  // only column-1 lines, which is all we need. Names may contain dots
+  // (provider-style ids) plus alphanumerics, `_`, and `-`.
+  const HEADER = /^([A-Za-z0-9._-]+)\s+\((primary|subagent)\)\s*$/;
+  const agents = [];
+  for (const line of r.stdout.split("\n")) {
+    const m = line.match(HEADER);
+    if (m) agents.push({ name: m[1], kind: m[2] });
+  }
+
+  if (agents.length === 0) {
+    const msg = "no agents parsed from `opencode agent list` output. Run the command directly to inspect.";
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ agents: [], error: msg }, null, 2) + "\n");
+      process.exit(1);
+    }
+    die(msg);
+  }
+
+  let ranked = agents;
+  if (flags.match) {
+    const hintTokens = tokensOf(flags.match);
+    const scored = agents
+      .map((a) => ({ ...a, score: scoreOf(hintTokens, a.name) }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score || a.name.length - b.name.length);
+    if (scored.length === 0) {
+      const msg = `no agents match "${flags.match}". Available: ${agents.map((a) => a.name).join(", ")}`;
+      if (flags.json) {
+        process.stdout.write(JSON.stringify({ match: flags.match, candidates: [], all: agents }, null, 2) + "\n");
+        process.exit(1);
+      }
+      die(msg);
+    }
+    ranked = scored;
+  } else {
+    ranked = [...agents].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  if (flags.json) {
+    process.stdout.write(JSON.stringify({ match: flags.match || null, agents: ranked.map(({ name, kind }) => ({ name, kind })) }, null, 2) + "\n");
+    return;
+  }
+  const width = Math.max(...ranked.map((a) => a.name.length));
+  for (const a of ranked) process.stdout.write(`${a.name.padEnd(width)}  ${a.kind}\n`);
+}
+
 // Read the prompt body from stdin. Returns null when stdin is a TTY (no
 // pipe attached), otherwise the buffer verbatim — newlines, $, backticks,
 // quotes all pass through unchanged. Only used by `spawn`, which always
@@ -732,7 +999,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const sub = argv[0];
   if (!sub || sub === "--help" || sub === "-h") {
-    process.stdout.write(`oc <subcommand> [args]\n\nSubcommands:\n  spawn     spawn an OpenCode task (foreground; --bg for background)\n  tail      stream/peek a session's progress\n  sessions  list/inspect spawned sessions\n  cancel    cancel one or all running sessions\n  models    list providers/models (diagnostic; suggests alternatives after a failed spawn)\n`);
+    process.stdout.write(`oc <subcommand> [args]\n\nSubcommands:\n  spawn     start an OpenCode session (always detached; /oc:tail to wait)\n  tail      stream/peek a session's progress\n  sessions  list/inspect spawned sessions\n  cancel    cancel one or all running sessions\n  models    list providers/models (diagnostic; suggests alternatives after a failed spawn)\n  agents    list opencode-resolved agents (diagnostic; suggests alternatives after a failed spawn)\n`);
     return;
   }
   if (!SUBCMDS.has(sub)) die(`unknown subcommand: ${sub}`);
@@ -755,6 +1022,7 @@ async function main() {
     else if (sub === "cancel")  await cmdCancel(rest);
     else if (sub === "gc")      await cmdGc(rest);
     else if (sub === "models")  await cmdModels(rest);
+    else if (sub === "agents")  await cmdAgents(rest);
   } catch (e) {
     die(e.message || String(e));
   }

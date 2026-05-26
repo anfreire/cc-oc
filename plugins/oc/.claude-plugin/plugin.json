@@ -1,7 +1,7 @@
 {
   "name": "oc",
-  "version": "0.2.0",
-  "description": "Controlled opencode launcher from Claude Code. Read-only by default; foreground or background; per-spawn MCP exclusion; tail in-progress jobs on demand.",
+  "version": "0.3.0",
+  "description": "Controlled opencode launcher from Claude Code. Read-only by default; always detached (fire-and-forget); per-spawn MCP exclusion; tail in-progress jobs on demand.",
   "author": {
     "name": "anfreire"
   },

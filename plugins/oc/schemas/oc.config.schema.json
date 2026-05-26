@@ -74,7 +74,7 @@
       "type": "object",
       "additionalProperties": false,
       "description": "How aggressively to prune old session logs on CC SessionEnd.",
-      "markdownDescription": "How aggressively to prune old session logs on CC SessionEnd.\n\nThe `gc` hook runs at the end of every Claude Code session. It detaches still-running bg jobs (preserves them in the index) and prunes logs by age, then by total size.",
+      "markdownDescription": "How aggressively to prune old session logs on CC SessionEnd.\n\nThe `gc` hook runs at the end of every Claude Code session. It marks still-running sessions as `detached` (preserves them in the index) and prunes logs by age, then by total size.",
       "properties": {
         "logsDays": {
           "type": "integer",

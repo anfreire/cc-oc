@@ -1,6 +1,6 @@
 # cc-oc
 
-> Controlled launcher for [opencode](https://opencode.ai), invoked from inside [Claude Code](https://claude.ai/code). Per-spawn MCP control, session ledger, foreground or detached.
+> Controlled launcher for [opencode](https://opencode.ai), invoked from inside [Claude Code](https://claude.ai/code). Per-spawn MCP control, session ledger, always detached.
 
 Each `/oc:spawn` is one ephemeral `opencode run --format json` invocation against **your own opencode config** (`~/.config/opencode/opencode.json` + workspace `.opencode/`). The plugin only writes a tiny per-spawn override file when you ask it to disable specific MCP servers — otherwise opencode runs entirely against your existing setup, untouched.
 
@@ -42,31 +42,30 @@ After `/reload-plugins` (or on the next Claude Code session), `/oc:spawn`, `/oc:
 
 ```text
 /oc:spawn summarize the architecture of this repo
-/oc:spawn --bg find every place that calls foo() and report
 /oc:spawn --exclude-mcp playwright quick scan, no browser needed
 /oc:spawn --provider opencode-go --model deepseek-v4-flash review the diff
 /oc:spawn --continue <id> now write tests for what you found
-/oc:tail                                 # peek at the latest job
-/oc:tail --follow                        # block until done
+/oc:tail <id>                            # peek at progress
+/oc:tail <id> --follow                   # block until opencode finishes
 /oc:sessions                             # list your spawned jobs
 /oc:cancel <id>                          # abort one
 /oc:cancel --all                         # abort all running in this CC session
 ```
 
-Append `--help` to any command for the full flag list inline.
+Each `/oc:spawn` returns immediately with a session id and the four follow-up commands. opencode keeps running in the background; pull the result when you want it with `/oc:tail <id>` (peek) or `/oc:tail <id> --follow` (block until done). Append `--help` to any command for the full flag list inline.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `/oc:spawn` | Spawn an opencode task. Foreground by default; opencode's own permission gating applies (override with `--write`). Flags: `--bg`, `--write`, `--provider` + `--model` (paired), `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--reasoning`, `--json`. Prompt follows the flags directly — no separator. |
+| `/oc:spawn` | Start an opencode session detached. Returns immediately with a session id and the four follow-up commands; opencode keeps running. Read-only by default; opencode's own permission gating applies (override with `--write`). Flags: `--write`, `--provider` + `--model` (paired), `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--json`. Prompt follows the flags directly — no separator. |
 | `/oc:tail` | Stream/peek a session's events. Flags: `--follow`, `--lines N`, `--since ms`, `--reasoning`, `--raw`, `--json`. No arg → latest active job. |
 | `/oc:sessions` | List + inspect. Flags: `--all`, `--json`. Pass a session id (or unique prefix) for full details. |
 | `/oc:cancel` | Cancel one or all. `--all` scopes to this CC session; add `--workspace` to widen. `--json` for machine-readable. |
 
 ### `oc-delegate` subagent
 
-The plugin also ships an optional `oc-delegate` subagent. Claude may invoke it on its own when an autonomous plan reaches a step that would bloat the parent context (large explorations, second-opinion reviews, sandboxed writes). The subagent makes one delegated `/oc:spawn` call and returns only a short summary — the verbatim opencode transcript stays in the subagent's own context.
+The plugin also ships an optional `oc-delegate` subagent. Claude may invoke it on its own when an autonomous plan reaches a step that would bloat the parent context (large explorations, second-opinion reviews, sandboxed writes). The subagent starts one delegated opencode session via `/oc:spawn`, waits for it via `/oc:tail --follow`, and returns opencode's final assistant message verbatim plus a 1–2 line summary — the rest of the opencode transcript (tool calls, intermediate steps, reasoning) stays in the subagent's own context and never reaches the parent thread.
 
 ## Resuming a session
 
@@ -134,6 +133,12 @@ When you ask Claude in natural language ("use the DeepSeek flash model from Open
 
 Optional `--variant <name>` is passed straight through to opencode (used by providers like `opencode-go/deepseek-v4-flash` to select reasoning effort). opencode silently ignores variants on providers that don't support them.
 
+### Agents
+
+Pin a specific opencode agent for a spawn with `--agent <name>` (e.g. `--agent build`, `--agent plan`). cc-oc passes the name through verbatim; **opencode owns agent resolution** — it merges built-ins with whatever you've configured under `agent.*` in your opencode config (global + project) and in any opencode plugin packages you have installed.
+
+When you ask Claude in natural language ("use the build agent", "pin the explore subagent"), Claude is instructed to call a built-in `oc.mjs agents` diagnostic to find the real id before spawning. When opencode rejects an unknown agent name, Claude uses the same diagnostic to suggest alternatives. The diagnostic shells out to `opencode agent list` and emits just the names + kinds (`primary` / `subagent`), with optional `--match "<hint>"` for token-ranked filtering and `--json` for structured output.
+
 ## Controlling which opencode MCP servers run
 
 The bit you can't easily do by editing your opencode config: **per-spawn MCP control without touching the global file**.
@@ -153,25 +158,26 @@ Under the hood, when there's anything to exclude, the plugin writes a tiny `open
   └─ if anything to override (effective excludeMcps non-empty):
        write per-spawn opencode.json into ~/.claude/plugins/data/oc/runs/<id>/
        and pass it as OPENCODE_CONFIG_DIR
-  └─ spawn `opencode run --format json` (foreground or detached)
-  └─ stream NDJSON events → render digest line → write log
-  └─ record the session in the local ledger so /oc:tail and friends can find it
+  └─ spawn `opencode run --format json` detached: opencode in its own process group, stdio wired to the log file via raw fds, no pipes through cc-oc
+  └─ record in the local ledger (pending entry with pid + log path), print the started-session block, child.unref(), exit — opencode keeps running until it finishes on its own
+  └─ later /oc:tail / /oc:sessions / SessionEnd `gc` reconcile the entry to completed/failed by scanning the log
 ```
 
 ## Trust model
 
 The plugin runs entirely on your machine, against your `~/.claude/oc.json` and your authenticated `opencode`. The slash-command wrappers instruct Claude to pipe your prompt body through a single-quoted heredoc on stdin, so shell metacharacters in your prompt are not reinterpreted by the shell. The plugin never opens a network listener and never uploads anything.
 
-## Background jobs at CC session end
+## Detached sessions at CC session end
 
-When a Claude Code session ends, the `gc` hook marks any still-running `/oc:spawn --bg` jobs as `detached` in the ledger — **the opencode child keeps running**. The next time you start CC, `/oc:sessions --all` will surface those detached jobs; `/oc:tail <id>` still works against the log. To kill a detached job, find its pid in `/oc:sessions <id>` and SIGTERM it yourself, or use `/oc:cancel <id>` if the process is still tracked.
+When a Claude Code session ends, the `gc` hook marks any still-running cc-oc sessions from that CC session as `detached` in the ledger — **the opencode child keeps running**. Spawn is always fire-and-forget, so any session whose log hasn't shown a terminal event by SessionEnd lands here. The next time you start CC, `/oc:sessions --all` will surface those detached sessions; `/oc:tail <id>` still works against the log. To kill a detached session, find its pid in `/oc:sessions <id>` and SIGTERM it yourself, or use `/oc:cancel <id>` if the process is still tracked.
 
 ## Troubleshooting
 
 - **`opencode binary not found`** — install opencode (`curl -fsSL https://opencode.ai/install | bash`) and rerun. If opencode lives somewhere non-standard, set `OPENCODE_BIN=/abs/path/to/opencode` in your shell rc so subprocess shells (including CC subagents) can find it.
-- **`UnknownError: Model not found: ...`** — opencode rejected the model id. Pass `--provider <name> --model <id>` (paired) with an id opencode recognizes. Claude is instructed to run cc-oc's built-in `oc.mjs models --match <hint>` diagnostic to suggest alternatives when this fails; you can also list everything via `opencode models`.
+- **`UnknownError: Model not found: ...`** — opencode rejected the model id. Pass `--provider <name> --model <id>` (paired) with an id opencode recognizes. Claude is instructed to run cc-oc's built-in `oc.mjs models --match "<hint>"` diagnostic to suggest alternatives when this fails; you can also list everything via `opencode models`.
+- **`UnknownError: Agent not found: ...`** — opencode rejected the agent name. Claude is instructed to run `oc.mjs agents --match "<hint>"` (or bare `oc.mjs agents` for the full list) to find the real id; you can also list directly via `opencode agent list`.
 - **MCP server didn't load** — check whether `excludeMcps` (or `--exclude-mcp`) names it. Otherwise it's an opencode-side issue — debug with `opencode mcp list`.
-- **Background job appears "running" but is done** — call `/oc:tail` or `/oc:sessions` again. Each call reconciles by reading the log for terminal events.
+- **Session appears "running" but is done** — call `/oc:tail` or `/oc:sessions` again. Each call reconciles by reading the log for terminal events.
 - **Stale state / disk usage** — log retention runs automatically on every CC SessionEnd (controlled by `retention.logsDays` and `retention.maxLogsMb` in `oc.json`). To force a hard wipe, `rm -rf ~/.claude/plugins/data/oc/`.
 
 ## Files written by this plugin
