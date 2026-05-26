@@ -48,13 +48,47 @@ When the user phrases a request naturally, translate it into flags before passin
 
 `--provider` and `--model` are paired — pass both or neither. `--continue <session-id>` resumes a prior opencode session with its full conversation history; find ids via `/oc:sessions`. For the full flag list, run `/oc:spawn --help`.
 
-Run:
+## Invocation
+
+Two distinct shapes — pick by *who is composing the bash command*. They are not interchangeable.
+
+### A. From the `/oc:spawn` slash command — use `--stdin`
+
+This block runs when the user types `/oc:spawn …`. Claude Code substitutes `$ARGUMENTS` textually into the single-quoted heredoc body before bash sees it; `oc.mjs --stdin` then splits flags from the prompt body on the first ` -- ` separator. This is the *only* place `--stdin` belongs, and the *only* shape that requires the user to type ` -- ` before the prompt (`/oc:spawn --bg -- "your prompt"`).
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --stdin <<'__OC_ARGV__'
 $ARGUMENTS
 __OC_ARGV__
 ```
+
+If the user forgot the ` -- ` separator, `oc.mjs` dies with `missing ` -- ` separator before prompt …`. Surface that error and ask the user to retry with ` -- ` before the prompt — do not silently retry by composing the call yourself.
+
+### B. When you (Claude) compose the call yourself — use `--prompt-stdin`
+
+If you are deciding autonomously to spawn opencode — *not* relaying a user-typed `/oc:spawn …` — use `--prompt-stdin`. Flags go in argv as normal; the prompt body goes alone in the heredoc. **There is no ` -- ` separator in this shape.** This is the same pattern the `oc-delegate` subagent uses.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn [flags] --prompt-stdin <<'OC_PROMPT'
+<the prompt body, may contain $, `, ", ', newlines — passes through verbatim>
+OC_PROMPT
+```
+
+Examples:
+
+```bash
+# foreground, default provider/model
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --prompt-stdin <<'OC_PROMPT'
+Review the staged diff for security issues.
+OC_PROMPT
+
+# background, custom provider + model
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --bg --provider google --model gemini-2.5-pro --prompt-stdin <<'OC_PROMPT'
+Trace how config flows from CLI flag to runtime, then report.
+OC_PROMPT
+```
+
+Do **not** use `--stdin` in this shape. `--stdin` exists to receive `$ARGUMENTS` as one opaque blob from the slash-command wrapper; composing a `--stdin` heredoc body yourself (flags and prompt fused on the same line) is the bug v0.1.5 added a fail-fast for, and `oc.mjs` will `die()` rather than mis-parse your flag-like tokens. `--prompt-stdin` keeps flags in argv and the prompt verbatim on stdin, so there is nothing to mis-parse.
 
 ## Output rules
 

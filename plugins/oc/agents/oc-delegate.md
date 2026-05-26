@@ -26,11 +26,11 @@ Do not use for small/quick tasks the parent thread can answer directly.
   OC_DELEGATE_PROMPT
   ```
 
-  Flags (`--read-only`, `--bg`, `--model …`, etc.) go in argv where the shell parses them normally. `--prompt-stdin` tells `oc.mjs` to read the prompt from stdin instead of from argv. The single-quoted heredoc terminator (`<<'OC_DELEGATE_PROMPT'`) disables every form of shell interpolation inside the body — `$VAR`, backticks, embedded quotes, all pass through verbatim. If your prompt itself contains a line that's literally `OC_DELEGATE_PROMPT`, pick a different sentinel.
+  Flags (`--read-only`, `--bg`, `--provider …`, `--model …`, etc.) go in argv where the shell parses them normally. `--prompt-stdin` tells `oc.mjs` to read the prompt from stdin instead of from argv. The single-quoted heredoc terminator (`<<'OC_DELEGATE_PROMPT'`) disables every form of shell interpolation inside the body — `$VAR`, backticks, embedded quotes, all pass through verbatim. If your prompt itself contains a line that's literally `OC_DELEGATE_PROMPT`, pick a different sentinel.
 
 - Default to `--read-only` unless the user explicitly asked for a write-mode task.
 - Default to foreground (no `--bg`) for short, well-bounded asks; use `--bg` only for open-ended exploration.
-- Pass `--model` / `--agent` / `--exclude-mcp` / `--include-mcp` only when the user specified them.
+- Pass `--provider`+`--model` (paired) / `--agent` / `--exclude-mcp` / `--include-mcp` only when the user specified them.
 - **Resuming a session.** opencode sessions are resumable: when the delegating instruction continues a specific earlier opencode session, include `--continue <session-id>` in the flags so the model keeps that session's full history instead of starting cold. The id comes from the delegating instruction — don't hunt for it yourself.
 - Do not inspect the repo, read files, or do follow-up work of your own.
 - Return the model's **final assistant message** (one block of text) plus a 1–2 line summary of what it did. The rest of the opencode transcript — tool calls, intermediate steps, reasoning — stays in this subagent's context and never propagates to the parent. Optionally include a list of touched files if the JSON output reports any.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.6 — 2026-05-26
+
+Teach Claude two distinct `oc.mjs` invocation shapes so autonomous spawns stop tripping the v0.1.5 fail-fast.
+
+- **`spawn.md` now documents `--stdin` and `--prompt-stdin` as non-interchangeable shapes**, with a rule for picking between them: `--stdin` belongs *only* in the `/oc:spawn` slash-command wrapper (where `$ARGUMENTS` arrives as one textual blob and ` -- ` separates flags from prompt); `--prompt-stdin` is the shape to use when Claude itself composes the bash call (flags in argv, prompt body alone in the heredoc, no ` -- ` anywhere). Direct-Bash invocations with `--stdin` were the recurring source of `missing ` -- ` separator before prompt …` errors from v0.1.5 — Claude was mimicking the slash-command "Run" template and forgetting that the ` -- ` is what the *user* types in the slash form, not something to fabricate from thin air. `--prompt-stdin` has no equivalent failure mode.
+- **`oc-delegate.md` flag examples updated** for the v0.1.4 `--provider`+`--model` split (was still showing the singular pre-split `--model`).
+
+No code changes.
+
 ## 0.1.5 — 2026-05-25
 
 Fail-fast on missing `--` separator in `/oc:spawn`.
