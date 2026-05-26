@@ -78,6 +78,18 @@ The prompt body may contain `--`, `--something`, quotes, `$`, backticks — none
 
 If a `$ARGUMENTS` token looks like a flag (`--foo`) but isn't in the known flag set, treat it as the start of the prompt body (don't pass it as a flag to `oc.mjs` — that would throw `unknown flag`).
 
+### When a known-flag token is part of the prompt
+
+Some natural-language prompts begin with — or are entirely *about* — a token that happens to match a known flag (e.g. *"explain the `--write` flag and when to use it"*, *"document `--bg` for new contributors"*, *"compare `--pure` vs `--no-pure`"*). Naive left-to-right parsing would consume `--write` / `--bg` / `--pure` as control flags and silently mutate the spawn's behavior (enabling writes, backgrounding, dropping plugins) instead of preserving the user's prompt text.
+
+Use sentence context to disambiguate:
+
+- If the surrounding words frame the flag-token as a *subject of discussion* — verbs like "explain", "document", "describe", "compare", "what does X do", "when should I use X" — keep the token in the prompt body. Do not pass it as a control flag.
+- If the surrounding words frame it as a *control directive* — "in the background", "with write access", "skip the X MCP", or the token sits cleanly at the start before unrelated prompt text — pass it as a flag.
+- When the user's intent is ambiguous, **ask before spawning**. A one-line clarification ("Did you want `--write` as a flag, or is the prompt about the `--write` flag itself?") is cheaper than running with the wrong sandbox or backgrounding policy.
+
+This is a known design tradeoff of the v0.2.0 separator-less form. The single recovery is your contextual reading; cc-oc itself will not catch this for you.
+
 ## Invocation template
 
 ```bash

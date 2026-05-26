@@ -17,7 +17,7 @@
       "type": "object",
       "additionalProperties": false,
       "description": "Defaults for every /oc:spawn (overridable per-call via flags).",
-      "markdownDescription": "Defaults for every `/oc:spawn`. Any per-call flag (`--model`, `--agent`, `--write`, `--exclude-mcp`, etc.) overrides the corresponding value here for that single spawn.\n\nThese settings only control **how cc-oc invokes opencode**. They never modify your opencode config files at `~/.config/opencode/` or `<cwd>/.opencode/` — opencode reads those itself.",
+      "markdownDescription": "Defaults for every `/oc:spawn`. Any per-call flag (`--provider`+`--model` paired, `--agent`, `--write`, `--exclude-mcp`, etc.) overrides the corresponding value here for that single spawn.\n\nThese settings only control **how cc-oc invokes opencode**. They never modify your opencode config files at `~/.config/opencode/` or `<cwd>/.opencode/` — opencode reads those itself.",
       "properties": {
         "model": {
           "type": ["string", "null"],

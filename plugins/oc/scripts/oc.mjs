@@ -228,9 +228,16 @@ async function cmdSpawn(argv, prompt) {
   }
 
   // --provider and --model: must be specified together, combined into provider/model.
-  if (flags.provider && !flags.model) die("--provider requires --model");
-  if (flags.model && !flags.provider) die("--model requires --provider");
-  if (flags.provider && flags.model) {
+  // Reject empty strings explicitly — `--provider= --model=` would otherwise
+  // pass both truthy checks (both falsy → no pairing error fires → spawn
+  // silently falls back to the configured default model).
+  const hasProvider = typeof flags.provider === "string" && flags.provider !== "";
+  const hasModel    = typeof flags.model    === "string" && flags.model    !== "";
+  if (flags.provider !== undefined && !hasProvider) die("--provider value must be non-empty");
+  if (flags.model    !== undefined && !hasModel)    die("--model value must be non-empty");
+  if (hasProvider && !hasModel) die("--provider requires --model");
+  if (hasModel && !hasProvider) die("--model requires --provider");
+  if (hasProvider && hasModel) {
     flags.model = `${flags.provider}/${flags.model}`;
   }
 
@@ -736,7 +743,11 @@ async function main() {
   // ignore stdin. No `--` separator, no `--stdin` / `--prompt-stdin` flags.
   try {
     if (sub === "spawn") {
-      const prompt = await readPromptFromStdin();
+      // `spawn --help` must print help without first consuming stdin —
+      // otherwise a piped-but-help invocation (e.g. `spawn --help < /dev/null`
+      // or a heredoc) would block reading the body before help can fire.
+      const wantsHelp = rest.some((t) => t === "--help" || t === "-h");
+      const prompt = wantsHelp ? null : await readPromptFromStdin();
       await cmdSpawn(rest, prompt);
     }
     else if (sub === "tail")    await cmdTail(rest);
