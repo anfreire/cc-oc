@@ -4,17 +4,15 @@ argument-hint: "[session-id] [--follow] [--lines N] [--since ms] [--reasoning] [
 allowed-tools: Bash(node:*)
 ---
 
-`$ARGUMENTS` accepts a session id (full or unique prefix). With no arg, tails the latest active job in this CC session.
+The user typed: `$ARGUMENTS`
 
-For the full flag list, run `/oc:tail --help`.
-
-Run:
+Parse this into tokens (an optional session id followed by flags) and invoke:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail --stdin <<'__OC_ARGV__'
-$ARGUMENTS
-__OC_ARGV__
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail <parsed tokens>
 ```
+
+If the user typed nothing, run `oc.mjs tail` with no args — that tails the latest active job in this CC session. For the full flag list, run `/oc:tail --help`.
 
 Output rules:
 - Pass the digest to the user verbatim — it's already terse.

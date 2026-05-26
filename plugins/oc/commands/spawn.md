@@ -1,25 +1,47 @@
 ---
 description: Spawn an opencode task. Read-only and foreground by default. Add --bg to detach, --write to allow file writes.
-argument-hint: "[flags] -- <prompt>"
+argument-hint: "[flags] <prompt>"
 allowed-tools: Bash(node:*)
 ---
 
-`$ARGUMENTS` is the full flag-and-prompt string. Pass the prompt after `--`.
+The user typed: `$ARGUMENTS`
 
-Examples:
+This is the verbatim invocation argument string. Parse it into **flag tokens** and a **prompt body** using the flag table below, then invoke `oc.mjs spawn` with the flags in argv and the prompt body piped on stdin via a single-quoted heredoc.
+
+`oc.mjs spawn` has one transport convention: **argv carries flags only; the prompt body comes in on stdin.** There is no `--` separator and no `--stdin` / `--prompt-stdin` flag. Mixing prompt words into argv will error.
+
+Examples of how the user-typed form maps to the invocation:
 
 ```
-/oc:spawn -- "Review the staged diff for security issues"
-/oc:spawn --bg -- "Trace how config flows from CLI flag to runtime"
-/oc:spawn --write -- "Apply the smallest fix that makes test foo pass"
-/oc:spawn --exclude-mcp playwright -- "Quick scan, no browser MCP needed"
-/oc:spawn --provider opencode-go --model deepseek-v4-flash -- "Review the staged diff"
-/oc:spawn --continue <session-id> -- "Now add error handling to that function"
+/oc:spawn review the staged diff for security issues
+  → node oc.mjs spawn <<'OC_PROMPT'
+    review the staged diff for security issues
+    OC_PROMPT
+
+/oc:spawn --bg trace how config flows from CLI flag to runtime
+  → node oc.mjs spawn --bg <<'OC_PROMPT'
+    trace how config flows from CLI flag to runtime
+    OC_PROMPT
+
+/oc:spawn --write apply the smallest fix that makes test foo pass
+  → node oc.mjs spawn --write <<'OC_PROMPT'
+    apply the smallest fix that makes test foo pass
+    OC_PROMPT
+
+/oc:spawn --provider opencode-go --model deepseek-v4-flash review the staged diff
+  → node oc.mjs spawn --provider opencode-go --model deepseek-v4-flash <<'OC_PROMPT'
+    review the staged diff
+    OC_PROMPT
+
+/oc:spawn --continue ses_abc now add error handling to that function
+  → node oc.mjs spawn --continue ses_abc <<'OC_PROMPT'
+    now add error handling to that function
+    OC_PROMPT
 ```
 
 ## Parsing user prompts into flags
 
-When the user phrases a request naturally, translate it into flags before passing through. The prompt body (after `--`) should describe the task; everything that's a knob goes in flags.
+When the user phrases a request naturally, translate it into flags before composing the call. The prompt body should describe the task; everything that's a knob goes in flags.
 
 | User phrasing | Flags |
 |---|---|
@@ -48,47 +70,25 @@ When the user phrases a request naturally, translate it into flags before passin
 
 `--provider` and `--model` are paired — pass both or neither. `--continue <session-id>` resumes a prior opencode session with its full conversation history; find ids via `/oc:sessions`. For the full flag list, run `/oc:spawn --help`.
 
-## Invocation
+## How to parse `$ARGUMENTS`
 
-Two distinct shapes — pick by *who is composing the bash command*. They are not interchangeable.
+Walk the typed string left-to-right. While the next token is a known flag (from the table above and `oc.mjs spawn --help`), consume it (and its value, if the flag takes one). As soon as you hit a token that isn't a known flag, **everything from that point on is the prompt body** — keep it verbatim, preserving spaces, punctuation, and casing.
 
-### A. From the `/oc:spawn` slash command — use `--stdin`
+The prompt body may contain `--`, `--something`, quotes, `$`, backticks — none of it gets reinterpreted, because it lands inside a single-quoted heredoc.
 
-This block runs when the user types `/oc:spawn …`. Claude Code substitutes `$ARGUMENTS` textually into the single-quoted heredoc body before bash sees it; `oc.mjs --stdin` then splits flags from the prompt body on the first ` -- ` separator. This is the *only* place `--stdin` belongs, and the *only* shape that requires the user to type ` -- ` before the prompt (`/oc:spawn --bg -- "your prompt"`).
+If a `$ARGUMENTS` token looks like a flag (`--foo`) but isn't in the known flag set, treat it as the start of the prompt body (don't pass it as a flag to `oc.mjs` — that would throw `unknown flag`).
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --stdin <<'__OC_ARGV__'
-$ARGUMENTS
-__OC_ARGV__
-```
-
-If the user forgot the ` -- ` separator, `oc.mjs` dies with `missing ` -- ` separator before prompt …`. Surface that error and ask the user to retry with ` -- ` before the prompt — do not silently retry by composing the call yourself.
-
-### B. When you (Claude) compose the call yourself — use `--prompt-stdin`
-
-If you are deciding autonomously to spawn opencode — *not* relaying a user-typed `/oc:spawn …` — use `--prompt-stdin`. Flags go in argv as normal; the prompt body goes alone in the heredoc. **There is no ` -- ` separator in this shape.** This is the same pattern the `oc-delegate` subagent uses.
+## Invocation template
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn [flags] --prompt-stdin <<'OC_PROMPT'
-<the prompt body, may contain $, `, ", ', newlines — passes through verbatim>
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn <parsed flag tokens> <<'OC_PROMPT'
+<parsed prompt body, verbatim>
 OC_PROMPT
 ```
 
-Examples:
-
-```bash
-# foreground, default provider/model
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --prompt-stdin <<'OC_PROMPT'
-Review the staged diff for security issues.
-OC_PROMPT
-
-# background, custom provider + model
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn --bg --provider google --model gemini-2.5-pro --prompt-stdin <<'OC_PROMPT'
-Trace how config flows from CLI flag to runtime, then report.
-OC_PROMPT
-```
-
-Do **not** use `--stdin` in this shape. `--stdin` exists to receive `$ARGUMENTS` as one opaque blob from the slash-command wrapper; composing a `--stdin` heredoc body yourself (flags and prompt fused on the same line) is the bug v0.1.5 added a fail-fast for, and `oc.mjs` will `die()` rather than mis-parse your flag-like tokens. `--prompt-stdin` keeps flags in argv and the prompt verbatim on stdin, so there is nothing to mis-parse.
+- The flag tokens go in argv in the order you parsed them (or any order — flags are not positional).
+- The heredoc terminator is single-quoted (`<<'OC_PROMPT'`), which is what makes `$VAR`, backticks, and embedded quotes pass through unchanged.
+- If the prompt body itself contains a line that's literally `OC_PROMPT`, pick a different sentinel (e.g. `OC_PROMPT_BODY_END`).
 
 ## Output rules
 

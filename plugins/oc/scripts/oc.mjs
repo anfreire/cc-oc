@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { parseArgs, splitCsv, splitRawArgumentString } from "./lib/args.mjs";
+import { parseArgs, splitCsv } from "./lib/args.mjs";
 import { loadUserConfig, validateConfig } from "./lib/config.mjs";
 import { buildConfigDir } from "./lib/builder.mjs";
 import { runForeground, runBackground, resolvePendingSession, reconcileSessionState } from "./lib/spawn.mjs";
@@ -85,7 +85,13 @@ function cancelSession(rec, env) {
 // tokens (anything before the `--` boundary). Lets a confused LLM caller learn
 // the flag surface at runtime rather than only from the slash-command markdown.
 const HELP_TEXTS = {
-  spawn: `/oc:spawn [flags] -- <prompt>
+  spawn: `oc.mjs spawn [flags] <<EOF
+<prompt body>
+EOF
+
+argv carries flags only. The prompt body is read from stdin (always required).
+There is no ` + "`--`" + ` separator and no flag for stdin; piping a prompt body in
+is the only way to pass one.
 
 Flags:
   --read-only         Default sandbox; opencode's own permission gating applies
@@ -192,7 +198,7 @@ function applySpawnOverrides(config, flags) {
 }
 
 // ─── spawn ──────────────────────────────────────────────────────────────────
-async function cmdSpawn(argv) {
+async function cmdSpawn(argv, prompt) {
   if (maybePrintHelp("spawn", argv)) return;
   const { flags, positionals, rest } = parseArgs(argv, {
     "read-only": { type: "boolean" },
@@ -212,6 +218,15 @@ async function cmdSpawn(argv) {
     "reasoning": { type: "boolean" }
   });
 
+  // argv carries flags only. Any leftover token means the caller mixed the
+  // prompt into argv — most likely an old-shape invocation from before v0.2.0,
+  // when ` -- ` separated flags from prompt. Point at the new shape rather than
+  // silently joining tokens.
+  const stray = [...positionals, ...rest];
+  if (stray.length) {
+    die(`unexpected argv token(s) after flags: ${JSON.stringify(stray.join(" "))} — argv carries flags only; pipe the prompt body on stdin: \`oc.mjs spawn [flags] <<EOF\\n<prompt>\\nEOF\``);
+  }
+
   // --provider and --model: must be specified together, combined into provider/model.
   if (flags.provider && !flags.model) die("--provider requires --model");
   if (flags.model && !flags.provider) die("--model requires --provider");
@@ -219,9 +234,10 @@ async function cmdSpawn(argv) {
     flags.model = `${flags.provider}/${flags.model}`;
   }
 
-  const promptParts = [...positionals, ...rest];
-  const prompt = promptParts.join(" ").trim();
-  if (prompt === "") die("missing prompt — usage: /oc:spawn [flags] -- <prompt>");
+  if (typeof prompt !== "string" || prompt.trim() === "") {
+    die("missing prompt — spawn reads the prompt body from stdin: `oc.mjs spawn [flags] <<EOF\\n<prompt>\\nEOF`");
+  }
+  const promptBody = prompt.replace(/\n+$/, "");
 
   if (flags.bg && flags.reasoning) {
     process.stderr.write("oc: --reasoning has no effect with --bg; pass it to /oc:tail instead.\n");
@@ -252,7 +268,7 @@ async function cmdSpawn(argv) {
 
   const common = {
     binary: bin,
-    prompt,
+    prompt: promptBody,
     configDir: built.configDir,
     model: effective.opencode.model || undefined,
     variant: effective.opencode.variant || undefined,
@@ -689,9 +705,12 @@ async function cmdModels(argv) {
   for (const r of out) process.stdout.write(`${r.provider.padEnd(28)} ${r.model_count}\n`);
 }
 
-// Read raw args from stdin (used by slash command wrappers to avoid shell
-// interpolation of $ARGUMENTS). Returns the whole buffer.
-async function readArgsFromStdin() {
+// Read the prompt body from stdin. Returns null when stdin is a TTY (no
+// pipe attached), otherwise the buffer verbatim — newlines, $, backticks,
+// quotes all pass through unchanged. Only used by `spawn`, which always
+// expects a prompt; other subcommands ignore stdin entirely.
+async function readPromptFromStdin() {
+  if (process.stdin.isTTY) return null;
   return new Promise((resolve, reject) => {
     let buf = "";
     process.stdin.setEncoding("utf8");
@@ -699,37 +718,6 @@ async function readArgsFromStdin() {
     process.stdin.on("end", () => resolve(buf));
     process.stdin.on("error", reject);
   });
-}
-
-// Split the raw stdin payload at the first `--` token boundary. Everything
-// before that is parsed as flags (and tokenized); everything after is taken
-// as the prompt VERBATIM. The previous implementation tokenized the whole
-// buffer and then re-joined with single spaces, which collapsed runs of
-// whitespace and stripped newlines inside the prompt body.
-function splitFlagsAndPrompt(raw) {
-  const m = raw.match(/(?:^|\s)--(?:\s|$)/);
-  if (!m) return { flagsRaw: raw, promptRaw: null };
-  return {
-    flagsRaw: raw.slice(0, m.index),
-    promptRaw: stripPromptShell(raw.slice(m.index + m[0].length))
-  };
-}
-
-// CC's slash-command harness passes `$ARGUMENTS` to us verbatim, which means
-// the user-typed quotes around the prompt arrive literally in the buffer
-// (e.g. `-- "review the diff"`). Peel one matching outer-quote pair and the
-// trailing newline that shell stdin helpers usually carry. Everything inside
-// is left untouched — repeated spaces, embedded quotes, $, backticks, all of
-// it passes through.
-function stripPromptShell(s) {
-  let out = s.replace(/^[ \t]+/, "").replace(/\n+$/, "");
-  if (out.length >= 2) {
-    const first = out[0], last = out[out.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      out = out.slice(1, -1);
-    }
-  }
-  return out;
 }
 
 // ─── main ───────────────────────────────────────────────────────────────────
@@ -741,42 +729,16 @@ async function main() {
     return;
   }
   if (!SUBCMDS.has(sub)) die(`unknown subcommand: ${sub}`);
-  let rest = argv.slice(1);
+  const rest = argv.slice(1);
 
-  // Two stdin modes:
-  //
-  //   --stdin        (slash-command pattern): the whole $ARGUMENTS string —
-  //                  flags AND prompt together — is sent over stdin so the
-  //                  shell never gets a chance to reinterpret it. We split
-  //                  on the first ` -- ` separator: flag portion is tokenised,
-  //                  prompt portion is preserved verbatim.
-  //
-  //   --prompt-stdin (programmatic / subagent pattern): flags arrive via argv
-  //                  as normal, but the prompt body is piped on stdin (e.g.
-  //                  from a heredoc). Useful when a caller cannot safely
-  //                  quote the prompt on a single command line.
-  if (rest[0] === "--stdin") {
-    const buf = await readArgsFromStdin();
-    const { flagsRaw, promptRaw } = splitFlagsAndPrompt(buf);
-    const tokens = splitRawArgumentString(flagsRaw);
-    // spawn takes a prompt body; if the user piped flag-like tokens without an
-    // explicit ` -- ` separator, parseArgs would silently consume them as flags
-    // (or throw `unknown flag`) and the user's intended prompt would be lost.
-    // Fail fast with an actionable message instead. Other subcommands take
-    // only flags / a session-id positional, so this rule is spawn-only.
-    if (sub === "spawn" && promptRaw === null && tokens.some((t) => /^--?[A-Za-z]/.test(t))) {
-      die("missing ` -- ` separator before prompt — flag-like tokens (--xyz / -x) in the prompt would be parsed as flags. Example: /oc:spawn --bg -- \"your prompt\"");
-    }
-    rest = [...rest.slice(1), ...tokens];
-    if (promptRaw !== null) rest.push("--", promptRaw);
-  } else if (rest.includes("--prompt-stdin")) {
-    const buf = await readArgsFromStdin();
-    rest = rest.filter((t) => t !== "--prompt-stdin");
-    rest.push("--", buf.replace(/\n+$/, ""));
-  }
-
+  // Single transport convention: argv carries flags only; the spawn prompt
+  // body arrives on stdin. tail/sessions/cancel/gc/models take no prompt and
+  // ignore stdin. No `--` separator, no `--stdin` / `--prompt-stdin` flags.
   try {
-    if (sub === "spawn")        await cmdSpawn(rest);
+    if (sub === "spawn") {
+      const prompt = await readPromptFromStdin();
+      await cmdSpawn(rest, prompt);
+    }
     else if (sub === "tail")    await cmdTail(rest);
     else if (sub === "sessions") await cmdSessions(rest);
     else if (sub === "cancel")  await cmdCancel(rest);

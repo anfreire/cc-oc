@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 — 2026-05-26
+
+**Breaking.** One transport convention for `oc.mjs spawn`: argv carries flags only, the prompt body is piped on stdin. No more ` -- ` separator, no `--stdin` / `--prompt-stdin` flags. The whole class of "Claude composed the wrong shape" failures from v0.1.5 / v0.1.6 disappears — there's only one shape now.
+
+- **`oc.mjs spawn` rewritten.** Reads the prompt body from stdin (required); any leftover argv token after the known flags is an error pointing at the new shape. The v0.1.5 fail-fast for the missing ` -- ` separator is gone — there is no separator anymore. Removed: `splitFlagsAndPrompt`, `stripPromptShell`, `readArgsFromStdin`, and the `--stdin` / `--prompt-stdin` branches in `main()`. Added: a small `readPromptFromStdin` helper called only for `spawn`.
+- **Slash commands rewritten as parse-then-compose instructions.** `spawn.md`, `tail.md`, `sessions.md`, `cancel.md` no longer embed a fixed bash template; they tell Claude to parse `$ARGUMENTS` into argv tokens and (for spawn) a prompt body, then compose the `node oc.mjs ...` call directly. The slash-command harness already routes every invocation through Claude, so parsing happens in the LLM step that was already there — no hidden server-side state.
+- **User-typed slash form: no separator.** Was: `/oc:spawn --bg -- "review the diff"`. Now: `/oc:spawn --bg review the diff`. Everything after the recognised flags is the prompt body, preserved verbatim through the single-quoted heredoc.
+- **`oc-delegate` aligned.** Drops `--prompt-stdin`; uses the bare-stdin heredoc shape (same one direct callers use).
+- **README quick-start and command examples updated** to the no-separator form.
+
+Migration: if you call `oc.mjs` directly from a script, drop any `--stdin` / `--prompt-stdin` flag and stop fusing the prompt into argv. The shape is now `oc.mjs spawn [flags] <<EOF\n<prompt>\nEOF`. Slash-command users see the new form automatically — the wrappers handle parsing.
+
 ## 0.1.6 — 2026-05-26
 
 Teach Claude two distinct `oc.mjs` invocation shapes so autonomous spawns stop tripping the v0.1.5 fail-fast.

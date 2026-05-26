@@ -21,12 +21,12 @@ Do not use for small/quick tasks the parent thread can answer directly.
 - Use exactly one `Bash` call per delegation. Use this exact shape so the prompt body is never reinterpreted by the shell:
 
   ```bash
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn [flags] --prompt-stdin <<'OC_DELEGATE_PROMPT'
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" spawn [flags] <<'OC_DELEGATE_PROMPT'
   <your prompt here, may contain anything including $, `, ", ', newlines>
   OC_DELEGATE_PROMPT
   ```
 
-  Flags (`--read-only`, `--bg`, `--provider …`, `--model …`, etc.) go in argv where the shell parses them normally. `--prompt-stdin` tells `oc.mjs` to read the prompt from stdin instead of from argv. The single-quoted heredoc terminator (`<<'OC_DELEGATE_PROMPT'`) disables every form of shell interpolation inside the body — `$VAR`, backticks, embedded quotes, all pass through verbatim. If your prompt itself contains a line that's literally `OC_DELEGATE_PROMPT`, pick a different sentinel.
+  Flags (`--read-only`, `--bg`, `--provider …`, `--model …`, etc.) go in argv where the shell parses them normally. `oc.mjs spawn` always reads the prompt body from stdin — there is no flag for it. The single-quoted heredoc terminator (`<<'OC_DELEGATE_PROMPT'`) disables every form of shell interpolation inside the body — `$VAR`, backticks, embedded quotes, all pass through verbatim. If your prompt itself contains a line that's literally `OC_DELEGATE_PROMPT`, pick a different sentinel.
 
 - Default to `--read-only` unless the user explicitly asked for a write-mode task.
 - Default to foreground (no `--bg`) for short, well-bounded asks; use `--bg` only for open-ended exploration.

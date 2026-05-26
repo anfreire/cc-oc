@@ -41,11 +41,11 @@ After `/reload-plugins` (or on the next Claude Code session), `/oc:spawn`, `/oc:
 ## Quick start
 
 ```text
-/oc:spawn -- "summarize the architecture of this repo"
-/oc:spawn --bg -- "find every place that calls foo() and report"
-/oc:spawn --exclude-mcp playwright -- "quick scan, no browser needed"
-/oc:spawn --provider opencode-go --model deepseek-v4-flash -- "review the diff"
-/oc:spawn --continue <id> -- "now write tests for what you found"
+/oc:spawn summarize the architecture of this repo
+/oc:spawn --bg find every place that calls foo() and report
+/oc:spawn --exclude-mcp playwright quick scan, no browser needed
+/oc:spawn --provider opencode-go --model deepseek-v4-flash review the diff
+/oc:spawn --continue <id> now write tests for what you found
 /oc:tail                                 # peek at the latest job
 /oc:tail --follow                        # block until done
 /oc:sessions                             # list your spawned jobs
@@ -59,7 +59,7 @@ Append `--help` to any command for the full flag list inline.
 
 | Command | Purpose |
 |---|---|
-| `/oc:spawn` | Spawn an opencode task. Foreground by default; opencode's own permission gating applies (override with `--write`). Flags: `--bg`, `--write`, `--provider` + `--model` (paired), `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--reasoning`, `--json`. Prompt after `--`. |
+| `/oc:spawn` | Spawn an opencode task. Foreground by default; opencode's own permission gating applies (override with `--write`). Flags: `--bg`, `--write`, `--provider` + `--model` (paired), `--variant`, `--agent`, `--cwd`, `--continue <sid>`, `--exclude-mcp <names>`, `--include-mcp <names>`, `--pure` / `--no-pure`, `--project` / `--no-project`, `--reasoning`, `--json`. Prompt follows the flags directly — no separator. |
 | `/oc:tail` | Stream/peek a session's events. Flags: `--follow`, `--lines N`, `--since ms`, `--reasoning`, `--raw`, `--json`. No arg → latest active job. |
 | `/oc:sessions` | List + inspect. Flags: `--all`, `--json`. Pass a session id (or unique prefix) for full details. |
 | `/oc:cancel` | Cancel one or all. `--all` scopes to this CC session; add `--workspace` to widen. `--json` for machine-readable. |
@@ -75,9 +75,9 @@ a **follow-up** to a prior session — the spawned model receives that session's
 full conversation history, not a cold prompt.
 
 ```text
-/oc:spawn -- "trace how config loading flows from flag to runtime"
+/oc:spawn trace how config loading flows from flag to runtime
 /oc:sessions                                          # find the session id
-/oc:spawn --continue ses_… -- "now write tests for that path"
+/oc:spawn --continue ses_… now write tests for that path
 ```
 
 Get ids from `/oc:sessions`. This maps to opencode's `--session` (resume *that
@@ -139,8 +139,8 @@ Optional `--variant <name>` is passed straight through to opencode (used by prov
 The bit you can't easily do by editing your opencode config: **per-spawn MCP control without touching the global file**.
 
 - **Config default**: `opencode.excludeMcps: ["playwright"]` disables `playwright` on every `/oc:spawn`.
-- **Per-call exclude**: `/oc:spawn --exclude-mcp github,notion -- "..."` adds names to the exclude list for one spawn.
-- **Per-call include (escape hatch)**: `/oc:spawn --include-mcp playwright -- "..."` removes names from the effective exclude list for one spawn — use this to re-enable a server you've excluded globally. `--exclude-mcp` is applied first, so `--exclude-mcp foo --include-mcp foo` is a no-op rather than order-dependent.
+- **Per-call exclude**: `/oc:spawn --exclude-mcp github,notion <prompt>` adds names to the exclude list for one spawn.
+- **Per-call include (escape hatch)**: `/oc:spawn --include-mcp playwright <prompt>` removes names from the effective exclude list for one spawn — use this to re-enable a server you've excluded globally. `--exclude-mcp` is applied first, so `--exclude-mcp foo --include-mcp foo` is a no-op rather than order-dependent.
 
 Under the hood, when there's anything to exclude, the plugin writes a tiny `opencode.json` (with `mcp.<name>.enabled = false` for each listed server) to a per-spawn `OPENCODE_CONFIG_DIR`. opencode deep-merges this on top of your global + project configs, so listed servers are disabled and the rest are untouched. When there's nothing to override, the plugin sets no env var at all and opencode runs entirely against your unmodified config.
 
@@ -160,7 +160,7 @@ Under the hood, when there's anything to exclude, the plugin writes a tiny `open
 
 ## Trust model
 
-The plugin runs entirely on your machine, against your `~/.claude/oc.json` and your authenticated `opencode`. The command wrappers send `$ARGUMENTS` over stdin so shell metacharacters in your prompt are not reinterpreted by the shell. The plugin never opens a network listener and never uploads anything.
+The plugin runs entirely on your machine, against your `~/.claude/oc.json` and your authenticated `opencode`. The slash-command wrappers instruct Claude to pipe your prompt body through a single-quoted heredoc on stdin, so shell metacharacters in your prompt are not reinterpreted by the shell. The plugin never opens a network listener and never uploads anything.
 
 ## Background jobs at CC session end
 

@@ -4,17 +4,15 @@ argument-hint: "[session-id] [--all] [--json]"
 allowed-tools: Bash(node:*)
 ---
 
-`$ARGUMENTS` accepts a session id for a detailed snapshot, `--all` to widen scope to other CC sessions in this workspace, or no arg to list current-CC-session jobs.
+The user typed: `$ARGUMENTS`
 
-For the full flag list, run `/oc:sessions --help`. To cancel a session, use `/oc:cancel`.
-
-Run:
+Parse this into tokens (an optional session id followed by flags) and invoke:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" sessions --stdin <<'__OC_ARGV__'
-$ARGUMENTS
-__OC_ARGV__
+node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" sessions <parsed tokens>
 ```
+
+If the user typed a session id, that's a detailed snapshot. `--all` widens scope to other CC sessions in this workspace. No args lists current-CC-session jobs. For the full flag list, run `/oc:sessions --help`. To cancel a session, use `/oc:cancel`.
 
 Output rules:
 - Relay the output verbatim.
