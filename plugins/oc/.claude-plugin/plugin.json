@@ -1,7 +1,7 @@
 {
   "name": "oc",
-  "version": "0.3.0",
-  "description": "Controlled opencode launcher from Claude Code. Read-only by default; always detached (fire-and-forget); per-spawn MCP exclusion; tail in-progress jobs on demand.",
+  "version": "0.4.0",
+  "description": "Thin launcher for opencode from Claude Code. Spawn / tail / sessions / cancel. Always detached, fire-and-forget.",
   "author": {
     "name": "anfreire"
   },
@@ -9,7 +9,6 @@
     "opencode",
     "claude-code",
     "launcher",
-    "mcp",
     "sub-agent"
   ]
 }

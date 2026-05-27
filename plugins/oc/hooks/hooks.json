@@ -1,12 +1,12 @@
 {
-  "description": "On CC session end: mark every still-running cc-oc session in this CC session as detached, then prune old logs and per-spawn run dirs.",
+  "description": "On CC session end, prune old opencode session logs (14d / 500MB cap).",
   "hooks": {
     "SessionEnd": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs\" gc --session-id \"${CC_SESSION_ID:-$session_id}\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs\" gc",
             "timeout": 20
           }
         ]

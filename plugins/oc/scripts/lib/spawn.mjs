@@ -1,381 +1,428 @@
-// Start `opencode run --format json ...` and return immediately.
-//
-// One mode: detached + fire-and-forget.
-//   - Opencode is spawned with `detached: true` (POSIX setsid()), giving it
-//     its own session/process group so group-targeted signals hitting cc-oc
-//     do not reach the child.
-//   - Stdio is wired to the per-spawn log file via raw file descriptors, not
-//     pipes — cc-oc's death does not break opencode's output channel.
-//   - cc-oc awaits only the child's `spawn` (success) or `error` (ENOENT/EPERM
-//     /etc.) event — long enough to detect a stillborn spawn, not long enough
-//     to wait for opencode to finish — then `child.unref()`s and resolves.
-//     The bash call that invoked `oc.mjs spawn` finishes in milliseconds;
-//     opencode keeps running, writing its NDJSON events to the log file,
-//     until it exits on its own.
-//
-// To wait for opencode to finish, the caller runs `/oc:tail <id> --follow`,
-// which blocks on the log file's terminal event (`step_finish` /
-// `session_idle`) and exits. To peek at current progress, `/oc:tail <id>`.
-// To abort, `/oc:cancel <id>`.
-//
-// Ledger lifecycle:
-//   - On successful spawn, an entry is upserted with status="running",
-//     pending=true, the pending id, the log file path, and the child's pid.
-//   - On a spawn-time failure (ENOENT/EPERM/etc.), a SpawnError event is
-//     appended to the log so reconcileSessionState marks the entry "failed"
-//     the next time /oc:tail or /oc:sessions runs.
-//   - The entry transitions to completed/failed lazily — when /oc:tail,
-//     /oc:sessions, or the SessionEnd `gc` hook scans the log for terminal
-//     events. cc-oc itself does NOT block to observe that transition.
-//
-// Note: `detached: true` has different semantics on Windows (separates the
-// console rather than the process group); cc-oc targets POSIX (Linux/macOS)
-// because opencode does, but the signal-isolation guarantee above is
-// specifically a POSIX property.
-
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { shortPrompt } from "./render.mjs";
+
+import { readLogState } from "./tail.mjs";
 import {
-  logFileFor,
   logsDir,
   upsertSession,
+  withLedgerLock,
   loadIndex,
   saveIndex,
-  withLedgerLock
+  logFileFor,
 } from "./ledger.mjs";
 
+/** @import { SessionRecord } from "./ledger.mjs" */
+
+const PROBE_MS = 20000; // How long to wait for the first session event after spawning opencode before giving up
+const TERMINAL_STATUSES = new Set(["done", "error"]);
+
+/**
+ * Checks if a process with the given PID is currently alive. This is done by sending signal 0 to the process, which does not actually send a signal but will throw an error if the process does not exist or if there are insufficient permissions to signal it. If the process is alive and can be signaled, the function returns true; otherwise, it returns false.
+ * @param {number} pid - the process ID to check for aliveness
+ * @returns {boolean} true if the process with the given PID is alive, false otherwise
+ */
 function isPidAlive(pid) {
   if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
-
-// Statuses that mean "done, do not mutate further." Once a record reaches one
-// of these, reconcileSessionState must leave its status alone — even if the
-// log later shows a terminal event from work that completed before/during the
-// cancel. Without this guard, a step_finish landing right after SIGTERM could
-// flip "cancelled" back to "completed."
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "detached"]);
-
-function isActiveRecord(record) {
-  if (TERMINAL_STATUSES.has(record.status)) return false;
-  return record.status === "running" || record.status === "queued" || record.pending === true;
-}
-
-function buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, pure }) {
-  const args = ["run", "--format", "json"];
-  if (sandbox === "workspace-write") args.push("--dangerously-skip-permissions");
-  if (cwd) { args.push("--dir", cwd); }
-  if (model) { args.push("--model", model); }
-  if (variant) { args.push("--variant", variant); }
-  if (agent) { args.push("--agent", agent); }
-  if (continueId) { args.push("--session", continueId); }
-  if (pure) { args.push("--pure"); }
-  return args;
-}
-
-function buildSpawnEnv({ configDir, env = process.env, disableProjectConfig }) {
-  // The spawned opencode inherits the caller's environment by default — same
-  // posture as launching `opencode` directly. We only override two keys that
-  // opencode reads from the env to control config loading.
-  const out = { ...env };
-  // OPENCODE_CONFIG_DIR is authoritative for this spawn: when the builder
-  // produced an override dir, point opencode at it; when there's nothing to
-  // override, clear an inherited value so opencode runs against its own
-  // discovery path and not some stale dir from the parent shell.
-  if (configDir) out.OPENCODE_CONFIG_DIR = configDir;
-  else delete out.OPENCODE_CONFIG_DIR;
-  // disableProjectConfig is authoritative too: explicit false (default, or
-  // --project on the CLI) must override an inherited disable from the parent
-  // env, otherwise the positive flag is silently a no-op.
-  if (disableProjectConfig) out.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
-  else delete out.OPENCODE_DISABLE_PROJECT_CONFIG;
-  return out;
-}
-
-// Parse one NDJSON line. Returns the event or null.
-function parseLine(line) {
-  const s = line.trim();
-  if (s === "") return null;
-  try { return JSON.parse(s); } catch { return null; }
-}
-
-function extractSessionId(event) {
-  if (!event) return null;
-  if (typeof event.sessionID === "string") return event.sessionID;
-  if (typeof event.sessionId === "string") return event.sessionId;
-  if (event.part && typeof event.part.sessionID === "string") return event.part.sessionID;
-  return null;
-}
-
-function extractText(event) {
-  if (!event) return null;
-  if (event.type === "text" && typeof event.text === "string") return event.text;
-  if (event.part && event.part.type === "text" && typeof event.part.text === "string") return event.part.text;
-  return null;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Start opencode detached and return as soon as the child is exec'd.
- *
- * Awaits only the child's `spawn` (success) or `error` (ENOENT/EPERM/etc.)
- * event. On success, upserts the ledger entry and `child.unref()`s; on
- * failure, appends a SpawnError event to the pending log so the reconciler
- * will mark the entry "failed" on the next /oc:tail or /oc:sessions call.
- *
- * Resolves with: { pid, pendingId, pendingLog, configDir, spawnError? }
+ * Attempts to kill a process group with the given PID. This is done by sending a SIGTERM signal to the negative of the PID, which targets the entire process group.
+ * @param {number} pid - the process ID of the process group to kill
+ */
+function killGroup(pid) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    /* may already be dead */
+  }
+}
+
+/**
+ * Shortens a prompt string to a specified maximum length, while also normalizing whitespace. The function replaces multiple consecutive whitespace characters with a single space, trims leading and trailing whitespace, and then truncates the resulting string to the specified maximum length. This is useful for creating concise summaries of prompts for display purposes, such as in session listings or logs.
+ * @param {string} prompt - the original prompt string to shorten
+ * @param {number} [max=72] - the maximum length of the shortened prompt; defaults to 72 characters
+ * @returns {string} a shortened version of the prompt with normalized whitespace, truncated to the specified maximum length
+ */
+function shortPrompt(prompt, max = 72) {
+  return String(prompt ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+/**
+ * Builds the command-line arguments for spawning the `opencode` process based on the provided options. The function constructs an array of arguments that includes the command to run (`run`), the output format (`json`), the working directory, and any specified options such as model, agent, variant, thinking mode, permissions skipping, session ID, and the user prompt. This array of arguments is then used when spawning the `opencode` process to ensure it is executed with the correct parameters.
+ * @param {Object} options - the options for building the CLI arguments
+ * @param {string} options.cwd - the working directory for the `opencode` process
+ * @param {string} [options.model] - optional model name to use for the session
+ * @param {string} [options.agent] - optional agent name to use for the session
+ * @param {string} [options.variant] - optional variant name to use for the session
+ * @param {boolean} [options.thinking=false] - whether to enable thinking mode
+ * @param {boolean} [options.dangerouslySkipPermissions=false] - whether to skip permissions checks (use with caution)
+ * @param {string} [options.session] - optional session ID to use for the session
+ * @param {string} options.prompt - the user prompt to pass to `opencode`
+ * @returns {string[]} an array of command-line arguments to use when spawning the `opencode` process
+ */
+function buildCliArgs({
+  cwd,
+  model,
+  agent,
+  variant,
+  thinking,
+  dangerouslySkipPermissions,
+  session,
+  prompt,
+}) {
+  const args = ["run", "--format", "json", "--dir", cwd];
+  if (model) args.push("--model", model);
+  if (agent) args.push("--agent", agent);
+  if (variant) args.push("--variant", variant);
+  if (thinking) args.push("--thinking");
+  if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
+  if (session) args.push("--session", session);
+  args.push("--", prompt);
+  return args;
+}
+
+/**
+ * Starts a new `opencode` session by spawning the `opencode` process with the appropriate command-line arguments and environment variables. The function creates a temporary log file for capturing the output of the `opencode` process, then spawns the process in a detached state. It waits for the process to start successfully and then polls the log file for events indicating that the session has been initialized or if any errors have occurred. If a session ID is observed in the logs, it updates the session ledger accordingly. If any errors occur during startup or if no events are observed within a specified timeout, it attempts to kill the process group and returns an error result.
+ * @param {Object} options - the options for starting the spawn
+ * @param {string} options.binary - the path to the `opencode` binary to execute
+ * @param {string} options.prompt - the user prompt to pass to `opencode`
+ * @param {string} options.cwd - the working directory for the `opencode` process
+ * @param {string} [options.model] - optional model name to use for the session
+ * @param {string} [options.agent] - optional agent name to use for the session
+ * @param {string} [options.variant] - optional variant name to use for the session
+ * @param {boolean} [options.thinking=false] - whether to enable thinking mode
+ * @param {boolean} [options.dangerouslySkipPermissions=false] - whether to skip permissions checks (use with caution)
+ * @param {string} [options.session] - optional session ID to use for the session
+ * @param {string} [options.ccSessionId] - optional cc session ID to associate with this opencode session (e.g. "s1")
+ * @param {NodeJS.ProcessEnv} [options.env=process.env] - environment variables to use when spawning the process and for path resolution; defaults to the current process's environment
+ * @return {Promise<{ ok: boolean, sessionId?: string, logFile?: string, pid?: number, message?: string, kind?: string }>} a promise that resolves to an object indicating the result of the spawn attempt, including whether it was successful, the session ID if available, the log file path, the process ID, and any error messages or kinds if it failed
+ * @throws {Error} if required options are missing or if there is an error during the spawn process
  */
 export async function startSpawn({
   binary,
   prompt,
-  configDir = null,
-  model,
-  variant,
-  agent,
   cwd,
-  sandbox = "read-only",
-  continueId = null,
-  pure = false,
+  model = null,
+  agent = null,
+  variant = null,
+  thinking = false,
+  dangerouslySkipPermissions = false,
+  session = null,
   ccSessionId = null,
   env = process.env,
-  disableProjectConfig = false
 }) {
-  const args = buildCliArgs({ model, variant, agent, cwd, sandbox, continueId, pure });
-  args.push("--", prompt);
-  const spawnEnv = buildSpawnEnv({ configDir, env, disableProjectConfig });
+  fs.mkdirSync(logsDir(env), { recursive: true, mode: 0o700 });
+  const tempLog = path.join(
+    logsDir(env),
+    `.spawning-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.ndjson`,
+  );
+
+  let outFd, errFd;
   try {
-    fs.mkdirSync(logsDir(env), { recursive: true, mode: 0o700 });
+    outFd = fs.openSync(tempLog, "a", 0o600);
+    errFd = fs.openSync(tempLog, "a", 0o600);
   } catch (e) {
-    throw new Error(`cannot create logs dir at ${logsDir(env)} (${e.code || e.message}). Check filesystem permissions.`);
+    if (outFd !== undefined) {
+      try {
+        fs.closeSync(outFd);
+      } catch {}
+    }
+    throw new Error(
+      `cannot open log file at ${tempLog} (${e.code || e.message})`,
+    );
   }
 
-  // Pending log — once we observe a sessionId in the events, /oc:tail can rename it.
-  const pendingId = `_pending_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  const pendingLog = path.join(logsDir(env), `${pendingId}.ndjson`);
-  let out = null, err = null;
-  try {
-    out = fs.openSync(pendingLog, "a", 0o600);
-    err = fs.openSync(pendingLog, "a", 0o600);
-  } catch (e) {
-    // If the first openSync succeeded and the second threw, close the
-    // first to avoid leaking the fd as we rethrow.
-    if (out !== null) { try { fs.closeSync(out); } catch { /* ignore */ } }
-    throw new Error(`cannot open log file at ${pendingLog} (${e.code || e.message}). Check filesystem permissions.`);
-  }
-
-  // `detached: true` calls setsid() on POSIX so the child gets a brand-new
-  // session and process group. That isolates it from process-group-targeted
-  // signals (terminal SIGINT, `kill -TERM -<pgid>`) — only the parent gets
-  // those, and the child genuinely survives the kill. The child's stdio uses
-  // raw file descriptors, not pipes through us, so cc-oc's exit does not
-  // break the log-write channel either.
-  //
-  // `spawn()` can throw synchronously on invalid options (TypeError-class
-  // errors). The try/finally below closes our copies of the log fds even on
-  // that path — without it, a sync throw would leak both descriptors.
+  const args = buildCliArgs({
+    cwd,
+    model,
+    agent,
+    variant,
+    thinking,
+    dangerouslySkipPermissions,
+    session,
+    prompt,
+  });
   let child;
   try {
     child = spawn(binary, args, {
-      env: spawnEnv,
-      cwd: cwd || process.cwd(),
-      stdio: ["ignore", out, err],
-      detached: true
+      env,
+      cwd,
+      stdio: ["ignore", outFd, errFd],
+      detached: true,
     });
   } finally {
-    // Parent no longer needs its copy of the log fds — on the success path
-    // the child has dup'd them and will write through its own copies; on the
-    // sync-throw path the child never existed and our fds are the only
-    // references.
-    try { fs.closeSync(out); } catch { /* ignore — keep any original error */ }
-    try { fs.closeSync(err); } catch { /* ignore */ }
+    try {
+      fs.closeSync(outFd);
+    } catch {}
+    try {
+      fs.closeSync(errFd);
+    } catch {}
   }
 
-  // Wait for one of: "spawn" (success — child has exec'd) or "error"
-  // (ENOENT/EPERM/etc. — child failed to exec). Anything past that point is
-  // opencode's own runtime, which we do not wait for — the caller pulls the
-  // final result via /oc:tail <id> --follow when (if) they want to block.
   const spawnOutcome = await new Promise((resolve) => {
     let settled = false;
     child.once("spawn", () => {
-      if (!settled) { settled = true; resolve({ ok: true }); }
+      if (!settled) {
+        settled = true;
+        resolve({ ok: true });
+      }
     });
     child.once("error", (e) => {
-      if (!settled) { settled = true; resolve({ ok: false, error: e }); }
+      if (!settled) {
+        settled = true;
+        resolve({ ok: false, error: e });
+      }
     });
   });
-
   if (!spawnOutcome.ok) {
-    // ENOENT/EPERM/etc.: append a SpawnError event to the pending log so
-    // reconcileSessionState will mark the eventual ledger entry "failed"
-    // the next time /oc:tail or /oc:sessions runs. No ledger upsert here —
-    // we never had a real session; the caller will report the failure.
-    try {
-      fs.appendFileSync(pendingLog, JSON.stringify({
-        type: "error",
-        timestamp: Date.now(),
-        error: { name: "SpawnError", data: { message: `cc-oc could not start opencode: ${spawnOutcome.error.code || spawnOutcome.error.message}` } }
-      }) + "\n");
-    } catch { /* ignore — best effort */ }
-    return { pid: child.pid, pendingId, pendingLog, configDir, spawnError: spawnOutcome.error };
+    let message;
+
+    if (spawnOutcome.error?.message) {
+      message = spawnOutcome.error.message;
+    } else if (spawnOutcome.error?.code) {
+      message = `Code ${spawnOutcome.error.code}`;
+    } else {
+      message = "Unknown error";
+    }
+    return {
+      ok: false,
+      kind: "spawn-error",
+      message,
+      logFile: tempLog,
+    };
   }
 
-  // Provisional ledger entry — sessionId unknown yet, recorded under the
-  // pending key. The reconciler migrates this entry to the real opencode
-  // session id when /oc:tail / /oc:sessions scans the log and finds the
-  // first event with a sessionID.
-  upsertSession({
-    sessionId: pendingId,
-    ccSessionId,
-    workspace: cwd || process.cwd(),
-    status: "running",
-    model: model ?? null,
-    agent: agent ?? null,
-    sandbox,
-    configDir: configDir ?? null,
-    logFile: pendingLog,
-    pid: child.pid,
-    prompt,
-    promptSummary: shortPrompt(prompt),
-    startedAt: new Date().toISOString(),
-    pending: true
-  }, env);
+  const probeResult = await new Promise((resolve) => {
+    let settled = false;
+    let timer, poll;
 
-  // Release the child so cc-oc's event loop can exit. The child is now a
-  // self-contained process: separate session/pgrp, file-fd stdio, no
-  // dangling references in this Node process.
+    const settle = (v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(poll);
+      child.removeListener("exit", onExit);
+      resolve(v);
+    };
+
+    const check = () => {
+      const state = readLogState(tempLog);
+      if (state.terminalKind === "error")
+        return settle({ kind: "error-event", state });
+      if (state.observedSessionId) return settle({ kind: "ok", state });
+      if (state.terminalKind === "done") return settle({ kind: "ok", state });
+      return false;
+    };
+
+    const onExit = (code, signal) => {
+      const state = readLogState(tempLog);
+      if (state.terminalKind === "error")
+        return settle({ kind: "error-event", state });
+      if (state.observedSessionId) return settle({ kind: "ok", state });
+      return settle({ kind: "no-events", state, exitCode: code, signal });
+    };
+
+    poll = setInterval(check, 100);
+    timer = setTimeout(
+      () => settle({ kind: "timeout", state: readLogState(tempLog) }),
+      PROBE_MS,
+    );
+
+    if (typeof timer.unref === "function") timer.unref();
+    if (typeof poll.unref === "function") poll.unref();
+    child.once("exit", onExit);
+  });
+
+  if (probeResult.kind === "timeout") {
+    killGroup(child.pid);
+    return {
+      ok: false,
+      kind: "timeout",
+      message: `opencode did not produce any event in ${PROBE_MS}ms`,
+      logFile: tempLog,
+      pid: child.pid,
+    };
+  }
+
+  if (probeResult.kind === "no-events") {
+    const ec = probeResult.exitCode ?? "unknown";
+    const sig = probeResult.signal ? ` (signal ${probeResult.signal})` : "";
+    return {
+      ok: false,
+      kind: "no-events",
+      message: `opencode exited before producing any event (exit ${ec}${sig})`,
+      logFile: tempLog,
+      pid: child.pid,
+    };
+  }
+
+  if (probeResult.kind === "error-event") {
+    const sid = probeResult.state.observedSessionId;
+    let logFile = tempLog;
+    if (sid) {
+      const target = logFileFor(sid, env);
+      try {
+        fs.renameSync(tempLog, target);
+        logFile = target;
+      } catch {}
+      upsertSession(
+        {
+          sessionId: sid,
+          ccSessionId,
+          workspace: cwd,
+          status: "error",
+          model,
+          agent,
+          logFile,
+          pid: child.pid,
+          prompt,
+          promptSummary: shortPrompt(prompt),
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          errorMessage: probeResult.state.errorMessage ?? null,
+        },
+        env,
+      );
+    }
+    killGroup(child.pid);
+    child.unref();
+    return {
+      ok: false,
+      kind: "error-event",
+      message: probeResult.state.errorMessage ?? "(no detail)",
+      logFile,
+      pid: child.pid,
+      sessionId: sid ?? null,
+    };
+  }
+
+  const sid = probeResult.state.observedSessionId;
+  let logFile = tempLog;
+  const target = logFileFor(sid, env);
+  try {
+    fs.renameSync(tempLog, target);
+    logFile = target;
+  } catch {}
+
+  const status = probeResult.state.terminalKind === "done" ? "done" : "running";
+  upsertSession(
+    {
+      sessionId: sid,
+      ccSessionId,
+      workspace: cwd,
+      status,
+      model,
+      agent,
+      logFile,
+      pid: child.pid,
+      prompt,
+      promptSummary: shortPrompt(prompt),
+      startedAt: new Date().toISOString(),
+      ...(status === "done" ? { completedAt: new Date().toISOString() } : {}),
+    },
+    env,
+  );
+
   child.unref();
 
-  return { pid: child.pid, pendingId, pendingLog, configDir };
+  return { ok: true, sessionId: sid, logFile, pid: child.pid };
 }
 
-// Helper used by tail and sessions: if an index entry is still `pending` (no
-// real OpenCode sessionID yet), peek at its log for the first sessionID we see
-// and rewrite the index entry in place. The log FILE stays where it is — we
-// only update the entry's sessionId + pending flag.
-export function resolvePendingSession(record, env = process.env) {
-  if (!record.pending) return record.sessionId;
-  if (!record.logFile || !fs.existsSync(record.logFile)) return null;
-  let content;
-  try { content = fs.readFileSync(record.logFile, "utf8"); } catch { return null; }
-  let sid = null;
-  for (const line of content.split("\n")) {
-    const ev = parseLine(line);
-    if (!ev) continue;
-    sid = extractSessionId(ev);
-    if (sid) break;
-  }
-  if (!sid) return null;
-  withLedgerLock(env, () => {
-    const idx = loadIndex(env);
-    const filtered = idx.sessions.filter((s) => s.sessionId !== record.sessionId);
-    // Preserve the original pending id on the migrated entry so findSession()
-    // still resolves it. Otherwise the `<pendingId>` printed in the
-    // started-session block (and quoted in recovery commands) goes stale on
-    // the first /oc:tail or /oc:sessions call.
-    filtered.push({
-      ...record,
-      sessionId: sid,
-      pendingId: record.sessionId,
-      pending: false,
-      updatedAt: new Date().toISOString()
-    });
-    idx.sessions = filtered;
-    saveIndex(idx, env);
-  });
-  return sid;
-}
-
-// Scan a session's log file. If we see a terminal event after the entry's
-// startedAt, mark the record completed/failed. If the entry has a tracked PID
-// that is no longer alive AND the log shows no terminal event, mark failed
-// (crashed silently). Returns the (possibly updated) record.
+/**
+ * Reconciles the session state for a given session record by checking the associated log file for terminal events and verifying if the process is still alive. If the session is not already in a terminal state, it reads the log file to determine if any terminal events have occurred. If a terminal event is found, it updates the session record accordingly. If no terminal events are found but the process is no longer alive, it marks the session as an error.
+ * @param {SessionRecord} record - the session record to reconcile
+ * @param {NodeJS.ProcessEnv} [env=process.env] - Optional environment variables to determine paths; defaults to the current process's environment.
+ * @returns {SessionRecord} the updated session record after reconciliation
+ */
 export function reconcileSessionState(record, env = process.env) {
   if (!record || !record.logFile) return record;
+
+  if (TERMINAL_STATUSES.has(record.status)) return record;
+
   if (!fs.existsSync(record.logFile)) {
-    // Entry whose log was never created — check PID liveness.
-    if (record.pid && isActiveRecord(record)) {
-      if (!isPidAlive(record.pid)) {
-        return withLedgerLock(env, () => {
-          const idx = loadIndex(env);
-          const filtered = idx.sessions.filter((s) => s.sessionId !== record.sessionId);
-          const updated = {
-            ...record,
-            status: "failed",
-            errorMessage: "opencode child exited before producing any events",
-            completedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          filtered.push(updated);
-          idx.sessions = filtered;
-          saveIndex(idx, env);
-          return updated;
-        });
-      }
+    if (record.pid && !isPidAlive(record.pid)) {
+      return withLedgerLock(() => {
+        const idx = loadIndex(env);
+        const filtered = idx.sessions.filter(
+          (s) => s.sessionId !== record.sessionId,
+        );
+        const updated = {
+          ...record,
+          status: "error",
+          errorMessage: "opencode exited before producing any events",
+          completedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        filtered.push(updated);
+        idx.sessions = filtered;
+        saveIndex(idx, env);
+        return updated;
+      }, env);
     }
     return record;
   }
 
-  let content;
-  try { content = fs.readFileSync(record.logFile, "utf8"); } catch { return record; }
-  // Only consider events that landed at or after this entry's start — guards
-  // against resumed sessions reusing a log and confusing the reconciler.
-  const startedAtMs = record.startedAt ? Date.parse(record.startedAt) : 0;
-  let lastText = null;
-  let terminalType = null;
-  let observedSid = record.sessionId;
-  for (const line of content.split("\n")) {
-    const ev = parseLine(line);
-    if (!ev) continue;
-    if (typeof ev.timestamp === "number" && ev.timestamp < startedAtMs) continue;
-    const sid = extractSessionId(ev);
-    if (sid) observedSid = sid;
-    const text = extractText(ev);
-    if (text) lastText = text;
-    const t = ev.type;
-    const partType = ev.part?.type;
-    if (t === "session_idle" || t === "session.idle") terminalType = "completed";
-    else if (t === "session_error" || t === "session.error" || t === "error") terminalType = "failed";
-    else if (t === "step_finish" || partType === "step-finish") terminalType = terminalType ?? "completed";
-  }
+  const state = readLogState(record.logFile);
+  let terminal = state.terminalKind;
+  if (!terminal && record.pid && !isPidAlive(record.pid)) terminal = "error";
+  if (!terminal) return record;
 
-  const active = isActiveRecord(record);
+  return withLedgerLock(() => {
+    const idx = loadIndex(env);
+    const filtered = idx.sessions.filter(
+      (s) => s.sessionId !== record.sessionId,
+    );
+    const updated = {
+      ...record,
+      status: terminal,
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...(terminal === "error" && state.errorMessage
+        ? { errorMessage: state.errorMessage }
+        : {}),
+    };
+    filtered.push(updated);
+    idx.sessions = filtered;
+    saveIndex(idx, env);
+    return updated;
+  }, env);
+}
 
-  // No terminal event yet, but the tracked child is dead → mark failed (crashed).
-  if (active && !terminalType && record.pid && !isPidAlive(record.pid)) {
-    terminalType = "failed";
+/**
+ * Attempts to cancel a session by sending an abort command to the `opencode` process if a session ID and `opencode` binary path are available, and then killing the process group. It also updates the session record in the ledger to mark it as done with a completed timestamp. This function is used to gracefully handle session cancellations initiated by the user.
+ * @param {SessionRecord} record - the session record to cancel
+ * @param {NodeJS.ProcessEnv} [env=process.env] - Optional environment variables to determine paths; defaults to the current process's environment.
+ * @param {string|null} [opencodeBin=null] - the path to the `opencode` binary to use for sending the abort command; if null, the abort command will not be sent
+ */
+export function cancelSession(record, env = process.env, opencodeBin = null) {
+  if (record.sessionId && opencodeBin) {
+    try {
+      spawnSync(opencodeBin, ["session", "abort", record.sessionId], {
+        env,
+        stdio: "ignore",
+        timeout: 5000,
+      });
+    } catch {}
   }
-
-  if (terminalType && active) {
-    return withLedgerLock(env, () => {
-      const idx = loadIndex(env);
-      const filtered = idx.sessions.filter((s) => s.sessionId !== record.sessionId);
-      const updated = {
-        ...record,
-        sessionId: observedSid,
-        pending: false,
-        status: terminalType,
-        completedAt: new Date().toISOString(),
-        lastAssistantText: lastText ?? record.lastAssistantText ?? null,
-        updatedAt: new Date().toISOString()
-      };
-      filtered.push(updated);
-      idx.sessions = filtered;
-      saveIndex(idx, env);
-      return updated;
-    });
-  }
-  if (observedSid && observedSid !== record.sessionId) {
-    // Pending entry but no terminal yet — at least migrate the sessionId.
-    return withLedgerLock(env, () => {
-      const idx = loadIndex(env);
-      const filtered = idx.sessions.filter((s) => s.sessionId !== record.sessionId);
-      const updated = { ...record, sessionId: observedSid, pending: false, updatedAt: new Date().toISOString() };
-      filtered.push(updated);
-      idx.sessions = filtered;
-      saveIndex(idx, env);
-      return updated;
-    });
-  }
-  return record;
+  
+  killGroup(record.pid);
+  upsertSession(
+    {
+      sessionId: record.sessionId,
+      status: "done",
+      completedAt: new Date().toISOString(),
+    },
+    env,
+  );
 }

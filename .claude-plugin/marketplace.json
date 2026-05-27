@@ -8,7 +8,7 @@
     {
       "name": "oc",
       "source": "./plugins/oc",
-      "description": "Controlled opencode launcher from Claude Code. Per-spawn MCP exclusion, session ledger, foreground or background."
+      "description": "Thin launcher for opencode from Claude Code. Spawn / tail / sessions / cancel. Always detached, fire-and-forget."
     }
   ]
 }

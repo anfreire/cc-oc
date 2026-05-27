@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.4.0 — 2026-05-27
+
+**Breaking. Complete rewrite as a thin pass-through to `opencode run`.** The 0.3.x direction (per-spawn MCP exclusion, optional config file, model/agent diagnostic subcommands, JSON output mode, sandbox flag) was scope creep on what should be a launcher. cc-oc 0.4 drops everything that isn't strictly "start opencode, track it, stream it, stop it" and exposes opencode's own flags verbatim instead of reinventing names for them.
+
+### Surface
+
+Four slash commands, seven spawn flags, three statuses, zero config.
+
+- **`/oc:spawn`** — flags pass through to `opencode run` 1:1: `--dir`, `--model`, `--agent`, `--variant`, `--thinking`, `--dangerously-skip-permissions`, `--session`. All optional. Prompt body on stdin via single-quoted heredoc, same as 0.3. cc-oc waits up to a hardcoded 20s for opencode's first event, then either surfaces an error inline (and exits 1) or prints the session id and detaches.
+- **`/oc:tail <id> [--follow] [--lines N]`** — session id now required (no implicit "latest in this CC session" fallback). `--lines` defaults to 10; combinable with `--follow` (last N first, then stream new). No more `--text` / `--raw` / `--since` / `--reasoning` / `--json` — events are always rendered uniformly, reasoning lines included when opencode emits them (i.e. when `--thinking` was passed to spawn).
+- **`/oc:sessions`** — scoped to the current Claude Code session only. Columns: session id, started (relative time), status, prompt summary. No `--all` widening, no per-id detail view, no `--json`.
+- **`/oc:cancel <id>`** — takes exactly one session id. Aborts if running, no-op otherwise. No `--all`.
+
+### Statuses collapsed
+
+Six statuses (`queued` / `running` / `completed` / `failed` / `cancelled` / `detached`) → three (`running` / `done` / `error`). Cancelled sessions are now `done`; the SessionEnd hook no longer mutates statuses at all (it just prunes logs). Reconcile-on-read still happens lazily when `/oc:tail` or `/oc:sessions` scans a log.
+
+### Pending ids removed
+
+The 20s probe extracts opencode's real session id from the first event and renames the temp log to `<sid>.ndjson` before recording the ledger entry. No more `_pending_<…>` synthetic ids, no migration logic in the reconciler, no dual `findSession` lookup. If the probe times out (no event in 20s) or the child exits without producing events, cc-oc kills the process group and exits 1 instead of leaving a pending row.
+
+### Typed event schema
+
+New `lib/events.mjs` ships a JSDoc discriminated union (`OpenCodeEvent`) covering the eight kinds opencode emits (`StepStartEvent`, `StepFinishEvent`, `TextEvent`, `ToolUseEvent`, `ReasoningEvent`, `SessionIdleEvent`, `SessionErrorEvent`, `ErrorEvent`) plus cc-oc's synthesised `StderrEvent` for unparseable lines. `renderEvent` switches on `event.type` against this union; unknown event types fall through to a `[ts] <type>` line so the stream stays informative when opencode adds new event kinds. `isTerminalEvent` is exported from the same module and used by the spawn probe and the tail reconciler.
+
+### Dropped
+
+- **Config file (`~/.claude/oc.json`).** Defaults are sufficient; users configure opencode itself.
+- **`lib/config.mjs`, `lib/builder.mjs`, `lib/args.mjs`, `lib/render.mjs`, `schemas/oc.config.schema.json`** — gone (renderer folded into `tail.mjs`; minimal arg parser inlined into `oc.mjs`).
+- **`models` and `agents` diagnostic subcommands.** Whitespace-decides natural-language hints are now the user's problem; opencode's own error messages (which include "Did you mean: …" suggestions) are surfaced verbatim.
+- **Per-spawn MCP exclusion (`--exclude-mcp` / `--include-mcp`)** and the `OPENCODE_CONFIG_DIR` override-writing machinery. Users who want per-spawn MCP control can manage it in their opencode config.
+- **`--read-only` / `--write` sandbox flag** — replaced by direct `--dangerously-skip-permissions` pass-through.
+- **`--provider` / `--model` pairing** — opencode's `--model` already takes the `provider/model` form; cc-oc passes it through verbatim.
+- **`--pure`, `--project` / `--no-project`, `--wait-ms`, `--no-wait`, `--continue`, `--json`** spawn flags.
+- **`--text`, `--raw`, `--since`, `--reasoning`, `--json`** tail flags.
+- **`--all`, `--workspace`** sessions/cancel widening flags.
+- **`--json`** output mode on every command.
+- **`detached` status, the `gc` hook's status-detach pass.** Logs are pruned on SessionEnd; statuses are reconciled lazily on the next read.
+- **`oc-delegate` subagent.** The plugin now ships only the four slash commands. Callers who want context-firewall forwarding can spawn a session and tail it themselves.
+
+### Migration
+
+There is no migration path. The ledger format, command surface, and flag names are all incompatible with 0.3. If you've been running 0.3, `rm -rf ~/.claude/plugins/data/oc/` before upgrading.
+
 ## 0.3.0 — 2026-05-26
 
 `/oc:spawn` is fire-and-forget detached. cc-oc spawns opencode with `detached: true` + file-fd stdio, awaits the child's `spawn` / `error` event to detect a stillborn exec, then `child.unref()`s and exits. The bash call returns in milliseconds with a started-session block (pid, pending session id, log path, four follow-up commands); opencode keeps running in its own process group, writing NDJSON events to the log file. To wait for the result, the caller runs `/oc:tail <id> --follow`, which blocks on the log's terminal event (`step_finish` / `session_idle`) and exits. Adds the symmetric `agents` diagnostic and folds in correctness/clarity fixes from multiple rounds of post-0.2.0 review.
