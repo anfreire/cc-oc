@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0 — 2026-05-28
+
+**Session-end detection rewritten around pid liveness. Renderer overhauled to preserve model output verbatim and to identify what tools touched.** 0.4 treated `step_finish` as a session terminator, which broke `--follow` for multi-step runs (it quit at step 1 of N) and was wrong on its premise — opencode in `--format json` mode never emits `session_idle`; the process simply exits. The truth model is now: the opencode `run` process dying *is* the session end. Events tell us what happened and whether it failed, not whether it's over.
+
+### Fixed
+
+- `/oc:tail --follow` no longer exits at the first `step_finish`. Multi-step runs block until the opencode child process actually exits. `followLog` polls `isPidAlive(pid)` for termination; events are read for rendering only.
+- `text` and `reasoning` events are no longer clipped to 120 chars. The model's actual answer — whether 6 chars or 17 KB with 296 newlines of markdown — comes through verbatim. Single-line bodies render inline (`[ts] model: <body>`), multi-line bodies use a header + body block (`[ts] model:\n<body>`).
+- `reconcileSessionState` no longer infers "done" from `step_finish`. It checks the pid first: alive → still running; dead with no error event → done; dead with an error event → error with the message.
+
+### Changed
+
+- `lib/events.mjs::isTerminalEvent` → `isErrorEvent`. Returns true only for `session_error` / `session.error` / `error`. `step_finish` and `session_idle` are no longer treated as session-ending.
+- `lib/tail.mjs::followLog(pid, logFile, opts)` — `pid` is a mandatory first positional argument. After pid death, a final drain surfaces any trailing bytes before return.
+- `lib/tail.mjs::LogState.terminalKind` → `errorSeen: boolean`, plus a new `lastEventAt: number | null` (ms epoch of the most recent event in the log).
+- `step_start` / `step_finish` no longer render. Their timestamps still drive `lastEventAt`.
+- `tool_use` events render as `[ts] tool: <name> <input>`. The input is picked via a priority-list heuristic (`filePath`, `path`, `file`, `command`, `pattern`, `url`, `query`, `description`, fallback to first string field as `key=value`, last-ditch compact JSON), clipped to ~120 chars. The output blob is no longer rendered — the model's subsequent `text` event surfaces anything worth saying about it.
+- `/oc:tail --lines N` → `/oc:tail --events N` (it always counted events, not lines; the name now matches).
+- `/oc:sessions` table: `started` column removed, `activity` column added. Activity shows the relative time of the most recent event in each session's log.
+- `commands/tail.md` and `commands/sessions.md` updated for the new flag name and column layout.
+
 ## 0.4.0 — 2026-05-27
 
 **Breaking. Complete rewrite as a thin pass-through to `opencode run`.** The 0.3.x direction (per-spawn MCP exclusion, optional config file, model/agent diagnostic subcommands, JSON output mode, sandbox flag) was scope creep on what should be a launcher. cc-oc 0.4 drops everything that isn't strictly "start opencode, track it, stream it, stop it" and exposes opencode's own flags verbatim instead of reinventing names for them.

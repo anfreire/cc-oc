@@ -164,19 +164,15 @@
  */
 
 /**
- * Returns true if the event ends the session (either cleanly or with an
- * error). Used by the spawn probe and the tail reconciler to detect when
- * a session has reached a final state.
+ * Returns true if the event reports a session-ending error. Used by the spawn
+ * probe and the tail reconciler to distinguish a clean exit from a failure;
+ * session end itself is detected by the opencode process dying, not by events.
  *
  * @param {OpenCodeEvent | null | undefined} event
  * @returns {boolean}
  */
-export function isTerminalEvent(event) {
+export function isErrorEvent(event) {
   if (!event) return false;
-  const t = event.type;
-  if (t === "session_idle" || t === "session.idle") return true;
-  if (t === "session_error" || t === "session.error") return true;
-  if (t === "error") return true;
-  if (t === "step_finish") return true;
-  return false;
+
+  return ["session_error", "session.error", "error"].includes(event.type);
 }

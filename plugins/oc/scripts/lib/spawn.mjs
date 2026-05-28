@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { readLogState } from "./tail.mjs";
+import { readLogState, isPidAlive } from "./tail.mjs";
 import {
   logsDir,
   upsertSession,
@@ -16,21 +16,6 @@ import {
 
 const PROBE_MS = 20000; // How long to wait for the first session event after spawning opencode before giving up
 const TERMINAL_STATUSES = new Set(["done", "error"]);
-
-/**
- * Checks if a process with the given PID is currently alive. This is done by sending signal 0 to the process, which does not actually send a signal but will throw an error if the process does not exist or if there are insufficient permissions to signal it. If the process is alive and can be signaled, the function returns true; otherwise, it returns false.
- * @param {number} pid - the process ID to check for aliveness
- * @returns {boolean} true if the process with the given PID is alive, false otherwise
- */
-function isPidAlive(pid) {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Attempts to kill a process group with the given PID. This is done by sending a SIGTERM signal to the negative of the PID, which targets the entire process group.
@@ -218,17 +203,14 @@ export async function startSpawn({
 
     const check = () => {
       const state = readLogState(tempLog);
-      if (state.terminalKind === "error")
-        return settle({ kind: "error-event", state });
+      if (state.errorSeen) return settle({ kind: "error-event", state });
       if (state.observedSessionId) return settle({ kind: "ok", state });
-      if (state.terminalKind === "done") return settle({ kind: "ok", state });
       return false;
     };
 
     const onExit = (code, signal) => {
       const state = readLogState(tempLog);
-      if (state.terminalKind === "error")
-        return settle({ kind: "error-event", state });
+      if (state.errorSeen) return settle({ kind: "error-event", state });
       if (state.observedSessionId) return settle({ kind: "ok", state });
       return settle({ kind: "no-events", state, exitCode: code, signal });
     };
@@ -315,7 +297,8 @@ export async function startSpawn({
     logFile = target;
   } catch {}
 
-  const status = probeResult.state.terminalKind === "done" ? "done" : "running";
+  const alive = isPidAlive(child.pid);
+  const status = alive ? "running" : "done";
   upsertSession(
     {
       sessionId: sid,
@@ -329,7 +312,7 @@ export async function startSpawn({
       prompt,
       promptSummary: shortPrompt(prompt),
       startedAt: new Date().toISOString(),
-      ...(status === "done" ? { completedAt: new Date().toISOString() } : {}),
+      ...(alive ? {} : { completedAt: new Date().toISOString() }),
     },
     env,
   );
@@ -340,43 +323,30 @@ export async function startSpawn({
 }
 
 /**
- * Reconciles the session state for a given session record by checking the associated log file for terminal events and verifying if the process is still alive. If the session is not already in a terminal state, it reads the log file to determine if any terminal events have occurred. If a terminal event is found, it updates the session record accordingly. If no terminal events are found but the process is no longer alive, it marks the session as an error.
+ * Reconciles the session state for a given session record. The opencode
+ * process pid is the source of truth for termination: while the pid is alive
+ * the session stays "running"; once the pid is gone, the log is scanned to
+ * decide between "done" (clean exit) and "error" (an error event was emitted).
+ * A missing log file with a dead pid is treated as an early-exit error.
+ *
  * @param {SessionRecord} record - the session record to reconcile
  * @param {NodeJS.ProcessEnv} [env=process.env] - Optional environment variables to determine paths; defaults to the current process's environment.
  * @returns {SessionRecord} the updated session record after reconciliation
  */
 export function reconcileSessionState(record, env = process.env) {
   if (!record || !record.logFile) return record;
-
   if (TERMINAL_STATUSES.has(record.status)) return record;
+  if (!record.pid || isPidAlive(record.pid)) return record;
 
+  let status, errorMessage;
   if (!fs.existsSync(record.logFile)) {
-    if (record.pid && !isPidAlive(record.pid)) {
-      return withLedgerLock(() => {
-        const idx = loadIndex(env);
-        const filtered = idx.sessions.filter(
-          (s) => s.sessionId !== record.sessionId,
-        );
-        const updated = {
-          ...record,
-          status: "error",
-          errorMessage: "opencode exited before producing any events",
-          completedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        filtered.push(updated);
-        idx.sessions = filtered;
-        saveIndex(idx, env);
-        return updated;
-      }, env);
-    }
-    return record;
+    status = "error";
+    errorMessage = "opencode exited before producing any events";
+  } else {
+    const state = readLogState(record.logFile);
+    status = state.errorSeen ? "error" : "done";
+    errorMessage = state.errorSeen ? state.errorMessage : null;
   }
-
-  const state = readLogState(record.logFile);
-  let terminal = state.terminalKind;
-  if (!terminal && record.pid && !isPidAlive(record.pid)) terminal = "error";
-  if (!terminal) return record;
 
   return withLedgerLock(() => {
     const idx = loadIndex(env);
@@ -385,12 +355,10 @@ export function reconcileSessionState(record, env = process.env) {
     );
     const updated = {
       ...record,
-      status: terminal,
+      status,
       completedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      ...(terminal === "error" && state.errorMessage
-        ? { errorMessage: state.errorMessage }
-        : {}),
+      ...(errorMessage ? { errorMessage } : {}),
     };
     filtered.push(updated);
     idx.sessions = filtered;

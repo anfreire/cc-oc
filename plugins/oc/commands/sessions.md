@@ -13,7 +13,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" sessions
 Takes no arguments. Lists every session spawned by `/oc:spawn` in the current Claude Code session, with columns:
 
 - `session` — opencode session id
-- `started` — relative time (e.g. `2m ago`)
+- `activity` — when the most recent event was emitted (e.g. `5s ago`)
 - `status` — `running` / `done` / `error`
 - `prompt` — first ~60 chars of the prompt
 

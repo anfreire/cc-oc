@@ -8,7 +8,7 @@ import {
   reconcileSessionState,
   cancelSession,
 } from "./lib/spawn.mjs";
-import { readDigest, followLog } from "./lib/tail.mjs";
+import { readDigest, followLog, readLogState } from "./lib/tail.mjs";
 import { findOpencodeBinary } from "./lib/opencode-bin.mjs";
 import { findSession, listSessions, logsDir } from "./lib/ledger.mjs";
 
@@ -25,7 +25,7 @@ const ARGS_SPEC = {
   },
   tail: {
     follow: { type: "boolean" },
-    lines: { type: "string" },
+    events: { type: "string" },
   },
   sessions: {},
   cancel: {},
@@ -109,14 +109,19 @@ function parseArgs(argv, spec) {
 }
 
 /**
- * Formats an ISO timestamp as a relative time string (e.g., "5s ago", "3m ago", "2h ago", "4d ago"). If the input is invalid or in the future, returns "?". This is used for displaying how long ago a session was started when listing sessions.
- * @param {string} iso - the ISO timestamp to format
- * @returns {string} a relative time string representing how long ago the timestamp was, or "?" if the input is invalid
+ * Formats a timestamp as a relative time string (e.g., "5s ago", "3m ago",
+ * "2h ago", "4d ago"). Accepts either an ISO 8601 string or milliseconds since
+ * epoch. Returns "?" for null, undefined, unparseable input, or future times.
+ *
+ * @param {string|number|null|undefined} when - the timestamp to format
+ * @returns {string} a relative time string, or "?" if the input is invalid
  */
-function relTime(iso) {
-  if (!iso) return "?";
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms) || ms < 0) return "?";
+function relTime(when) {
+  if (when == null) return "?";
+  const t = typeof when === "number" ? when : Date.parse(when);
+  if (!Number.isFinite(t)) return "?";
+  const ms = Date.now() - t;
+  if (ms < 0) return "?";
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -214,19 +219,19 @@ async function cmdTail(argv) {
     );
   }
 
-  let lines = 10;
-  if (flags.lines !== undefined) {
-    const n = Number(flags.lines);
+  let count = 10;
+  if (flags.events !== undefined) {
+    const n = Number(flags.events);
     if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
       die(
-        `--lines must be a non-negative integer (got ${JSON.stringify(flags.lines)})`,
+        `--events must be a non-negative integer (got ${JSON.stringify(flags.events)})`,
       );
     }
-    lines = n;
+    count = n;
   }
 
   if (!positionals[0])
-    die("usage: /oc:tail <session-id> [--follow] [--lines N]");
+    die("usage: /oc:tail <session-id> [--follow] [--events N]");
   const env = process.env;
   let record = findSession(positionals[0], env);
   if (!record) die(`no session matches "${positionals[0]}"`);
@@ -236,20 +241,22 @@ async function cmdTail(argv) {
     die(`no log file for session ${record.sessionId}`);
   }
 
-  const { digest, terminal, fileSize } = readDigest(record.logFile, { lines });
+  const { digest, fileSize } = readDigest(record.logFile, { count });
   if (digest) {
     process.stdout.write(digest);
     if (!digest.endsWith("\n")) process.stdout.write("\n");
   }
 
-  if (flags.follow && !terminal && record.status === "running") {
-    const r = await followLog(record.logFile, { startOffset: fileSize });
+  if (flags.follow && record.status === "running") {
+    const r = await followLog(record.pid, record.logFile, {
+      startOffset: fileSize,
+    });
     if (r.timedOut) die("tail timed out after 15 min");
     reconcileSessionState(record, env);
     return;
   }
 
-  if (!flags.follow && !terminal && record.status === "running") {
+  if (!flags.follow && record.status === "running") {
     process.stdout.write(`\n(session still running; use --follow to wait)\n`);
   }
 }
@@ -282,28 +289,26 @@ async function cmdSessions(argv) {
     return;
   }
 
-  const idW = Math.max(
-    "session".length,
-    ...sessions.map((s) => s.sessionId.length),
-  );
-  const startedW = Math.max(
-    "started".length,
-    ...sessions.map((s) => relTime(s.startedAt).length),
-  );
-  const statusW = Math.max(
-    "status".length,
-    ...sessions.map((s) => s.status.length),
-  );
+  const rows = sessions.map((s) => ({
+    sessionId: s.sessionId,
+    activity: relTime(s.logFile ? readLogState(s.logFile).lastEventAt : null),
+    status: s.status,
+    prompt: s.promptSummary || "",
+  }));
+
+  const idW = Math.max("session".length, ...rows.map((r) => r.sessionId.length));
+  const activityW = Math.max("activity".length, ...rows.map((r) => r.activity.length));
+  const statusW = Math.max("status".length, ...rows.map((r) => r.status.length));
 
   process.stdout.write(
-    `${"session".padEnd(idW)}  ${"started".padEnd(startedW)}  ${"status".padEnd(statusW)}  prompt\n`,
+    `${"session".padEnd(idW)}  ${"activity".padEnd(activityW)}  ${"status".padEnd(statusW)}  prompt\n`,
   );
-  for (const s of sessions) {
+  for (const r of rows) {
     process.stdout.write(
-      `${s.sessionId.padEnd(idW)}  ` +
-        `${relTime(s.startedAt).padEnd(startedW)}  ` +
-        `${s.status.padEnd(statusW)}  ` +
-        `${s.promptSummary || ""}\n`,
+      `${r.sessionId.padEnd(idW)}  ` +
+        `${r.activity.padEnd(activityW)}  ` +
+        `${r.status.padEnd(statusW)}  ` +
+        `${r.prompt}\n`,
     );
   }
 }
@@ -401,7 +406,7 @@ Spawn flags (all optional, all pass through to \`opencode run\`):
 
 Tail flags:
   --follow                            block until the session finishes
-  --lines <n>                         last N events (default 10; combinable with --follow)
+  --events <n>                        last N events (default 10; combinable with --follow)
 `;
 
 async function main() {
