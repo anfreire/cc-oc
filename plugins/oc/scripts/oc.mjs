@@ -241,7 +241,9 @@ async function cmdTail(argv) {
     die(`no log file for session ${record.sessionId}`);
   }
 
-  const { digest, fileSize } = readDigest(record.logFile, { count });
+  const { digest, fileSize, baseTimestamp } = readDigest(record.logFile, {
+    count,
+  });
   if (digest) {
     process.stdout.write(digest);
     if (!digest.endsWith("\n")) process.stdout.write("\n");
@@ -250,6 +252,7 @@ async function cmdTail(argv) {
   if (flags.follow && record.status === "running") {
     const r = await followLog(record.pid, record.logFile, {
       startOffset: fileSize,
+      baseTimestamp,
     });
     if (r.timedOut) die("tail timed out after 15 min");
     reconcileSessionState(record, env);

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 — 2026-05-28
+
+- Tail timestamps are now session-relative (`[+0:02]`, `[+5:12]`, `[+1:05:42]`) instead of wall-clock (`[HH:MM:SS]`). The base is the first event in the log; follow-mode continues the same clock.
+
 ## 0.5.0 — 2026-05-28
 
 **Session-end detection rewritten around pid liveness. Renderer overhauled to preserve model output verbatim and to identify what tools touched.** 0.4 treated `step_finish` as a session terminator, which broke `--follow` for multi-step runs (it quit at step 1 of N) and was wrong on its premise — opencode in `--format json` mode never emits `session_idle`; the process simply exits. The truth model is now: the opencode `run` process dying *is* the session end. Events tell us what happened and whether it failed, not whether it's over.

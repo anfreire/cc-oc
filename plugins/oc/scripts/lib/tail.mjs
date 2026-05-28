@@ -34,12 +34,25 @@ export function isPidAlive(pid) {
 }
 
 /**
- * Render a timestamp (in ms since epoch) as a human-readable string. If the input is falsy, returns a string of spaces to preserve alignment in logs.
- * @param {number|string|Date} ms - the timestamp to render, in milliseconds since epoch, or a value that can be passed to `new Date()`. If falsy, the function returns a string of spaces.
- * @returns {string} the rendered timestamp in "HH:MM:SS" format, or spaces if the input is falsy
+ * Render a timestamp as a session-relative offset string when `base` is
+ * provided (e.g. `+0:00`, `+5:12`, `+1:05:42`), or as wall-clock `HH:MM:SS`
+ * when it isn't. Returns padding spaces for falsy input.
+ *
+ * @param {number} ms - milliseconds since epoch
+ * @param {number} [base] - the first event's timestamp; when present, renders relative
+ * @returns {string} the formatted timestamp
  */
-function tsString(ms) {
-  if (!ms) return "         ";
+function tsString(ms, base) {
+  if (!ms) return "     ";
+  if (base) {
+    const delta = Math.max(0, Math.floor((ms - base) / 1000));
+    const s = delta % 60;
+    const m = Math.floor(delta / 60) % 60;
+    const h = Math.floor(delta / 3600);
+    if (h > 0)
+      return `+${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `+${m}:${String(s).padStart(2, "0")}`;
+  }
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
 }
@@ -153,11 +166,12 @@ function summarizeToolInput(input) {
  * `[ts] <type>` so the stream stays informative when opencode adds event
  * kinds we haven't typed.
  * @param {OpenCodeEvent | null | undefined} event - the event to render
+ * @param {number} [baseTimestamp] - the first event's timestamp; when present, renders session-relative offsets instead of wall-clock
  * @returns {string | null} the rendered block (may span multiple lines), or null when the event carries no displayable content
  */
-export function renderEvent(event) {
+export function renderEvent(event, baseTimestamp) {
   if (!event || typeof event !== "object") return null;
-  const ts = tsString(event.timestamp);
+  const ts = tsString(event.timestamp, baseTimestamp);
 
   switch (event.type) {
     case "step_start":
@@ -316,21 +330,26 @@ export function readLogState(logFile) {
  * @param {string} logFile - the file path to the session's log file
  * @param {Object} [options] - optional parameters
  * @param {number|null} [options.count=10] - the number of events from the end of the log to include in the digest; if null, includes all events; if 0, includes none
- * @returns {{ digest: string, fileSize: number }} the rendered digest and current file size in bytes
+ * @returns {{ digest: string, fileSize: number, baseTimestamp: number|null }} the rendered digest, current file size in bytes, and the first event's timestamp for follow-mode continuity
  */
 export function readDigest(logFile, { count = 10 } = {}) {
-  if (!fs.existsSync(logFile)) return { digest: "", fileSize: 0 };
+  if (!fs.existsSync(logFile))
+    return { digest: "", fileSize: 0, baseTimestamp: null };
   const stat = fs.statSync(logFile);
   const raw = fs.readFileSync(logFile, "utf8");
   const events = parseAll(raw);
+  const baseTimestamp =
+    events.length > 0 && typeof events[0].timestamp === "number"
+      ? events[0].timestamp
+      : null;
   const sliced =
     count === null ? events : count === 0 ? [] : events.slice(-count);
   const rendered = [];
   for (const ev of sliced) {
-    const line = renderEvent(ev);
+    const line = renderEvent(ev, baseTimestamp);
     if (line) rendered.push(line);
   }
-  return { digest: rendered.join("\n"), fileSize: stat.size };
+  return { digest: rendered.join("\n"), fileSize: stat.size, baseTimestamp };
 }
 
 /**
@@ -343,6 +362,7 @@ export function readDigest(logFile, { count = 10 } = {}) {
  * @param {string} logFile - the path to the log file to follow
  * @param {Object} [options] - optional parameters
  * @param {number} [options.startOffset=0] - the byte offset in the log file from which to start reading; defaults to 0
+ * @param {number|null} [options.baseTimestamp=null] - the first event's timestamp from the digest phase; used for session-relative rendering continuity
  * @param {number} [options.timeoutMs=900000] - the maximum time in milliseconds to wait before giving up; defaults to 15 minutes
  * @param {number} [options.intervalMs=250] - the interval in milliseconds at which to poll the log and pid; defaults to 250 ms
  * @returns {Promise<{ timedOut: boolean }>} whether the follow timed out before the process exited
@@ -350,7 +370,12 @@ export function readDigest(logFile, { count = 10 } = {}) {
 export async function followLog(
   pid,
   logFile,
-  { startOffset = 0, timeoutMs = 15 * 60 * 1000, intervalMs = 250 } = {},
+  {
+    startOffset = 0,
+    baseTimestamp = null,
+    timeoutMs = 15 * 60 * 1000,
+    intervalMs = 250,
+  } = {},
 ) {
   let lastSize = startOffset;
   let lastLineFragment = "";
@@ -375,7 +400,7 @@ export async function followLog(
     const complete = lastNl >= 0 ? text.slice(0, lastNl) : "";
     lastLineFragment = lastNl >= 0 ? text.slice(lastNl + 1) : text;
     for (const ev of parseAll(complete)) {
-      const line = renderEvent(ev);
+      const line = renderEvent(ev, baseTimestamp);
       if (line) process.stdout.write(line + "\n");
     }
   };
