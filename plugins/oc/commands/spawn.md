@@ -50,6 +50,9 @@ Two shapes:
 2. **Failed to start.** Opencode errored during the probe phase (e.g. invalid model, agent, or variant; permissions blocked; network error connecting to the provider). The error message from opencode is surfaced inline.
    ```
    OpenCode failed to start.
-   error: <error-message>
-   log:   <path>
+   error:    <error-message>
+   log:      <path>
+   recovery: <path to reference/recovery.md>
    ```
+
+On any failure — or a session stuck `running` with no new events (usage limit) — read the `recovery:` file above (`reference/recovery.md`) for how to find models/agents, decode the error, and resume.

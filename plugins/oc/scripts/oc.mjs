@@ -183,9 +183,16 @@ async function cmdSpawn(argv) {
   });
 
   if (!result.ok) {
+    const recoveryDoc = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "reference",
+      "recovery.md",
+    );
     process.stderr.write(`OpenCode failed to start.\n`);
-    process.stderr.write(`error: ${result.message}\n`);
-    process.stderr.write(`log:   ${result.logFile}\n`);
+    process.stderr.write(`error:    ${result.message}\n`);
+    process.stderr.write(`log:      ${result.logFile}\n`);
+    process.stderr.write(`recovery: ${recoveryDoc}\n`);
     process.exit(1);
   }
 

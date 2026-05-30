@@ -49,6 +49,8 @@ Flags (all optional, all pass through to `opencode run`):
 
 cc-oc does **not** validate flag values — opencode does. After spawn, cc-oc waits up to 20 seconds for opencode to emit its first event so the real session id can be captured and startup-time rejections (bad model, bad auth, config errors) surface in the spawn output. Once opencode emits its first event, cc-oc prints the session id and detaches; opencode keeps running.
 
+On a failed start the output also prints a `recovery:` line — the absolute path to a bundled guide (`reference/recovery.md`) covering how to find a valid model/agent, decode the provider error, and handle a session stuck `running` on a usage limit.
+
 ### `/oc:tail`
 
 Peek at or stream a session's events.

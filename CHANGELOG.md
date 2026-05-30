@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 — 2026-05-30
+
+- New bundled `reference/recovery.md` — a guide Claude reads on a failed or stalled spawn: find a valid model (`opencode models [--refresh]`) / agent (`opencode agent list`), list a model's `--variant` tiers, decode startup errors (model-not-found, insufficient-balance, auth), and handle the one failure cc-oc can't see — a provider usage limit (`429 usage_limit_reached`, retried silently inside opencode and never emitted to the `--format json` stream, so the session just sits `running`). Fixes are framed as options to offer the user, not actions to take unprompted.
+- `/oc:spawn` failure output now prints a `recovery:` line with the absolute path to that guide (resolved via the script's own `import.meta.url`), so it's one Read away on any failed start. `commands/spawn.md` documents it.
+
 ## 0.5.1 — 2026-05-28
 
 - Tail timestamps are now session-relative (`[+0:02]`, `[+5:12]`, `[+1:05:42]`) instead of wall-clock (`[HH:MM:SS]`). The base is the first event in the log; follow-mode continues the same clock.
