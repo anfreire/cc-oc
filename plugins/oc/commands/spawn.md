@@ -25,6 +25,7 @@ Single-quote the heredoc terminator (`<<'EOF'`) to pass the prompt verbatim; dro
 | `--agent <name>` | Pin a specific opencode agent |
 | `--variant <tier>` | Reasoning-effort variant (provider-specific: `high`, `max`, `minimal`, …) |
 | `--thinking` | Show reasoning blocks in the event stream |
+| `--pure` | Run opencode without external plugins |
 | `--dangerously-skip-permissions` | Bypass opencode's permission prompts for this spawn |
 | `--session <session-id>` | Resume that specific opencode session |
 

@@ -51,6 +51,7 @@ function shortPrompt(prompt, max = 72) {
  * @param {string} [options.agent] - optional agent name to use for the session
  * @param {string} [options.variant] - optional variant name to use for the session
  * @param {boolean} [options.thinking=false] - whether to enable thinking mode
+ * @param {boolean} [options.pure=false] - whether to run without external plugins
  * @param {boolean} [options.dangerouslySkipPermissions=false] - whether to skip permissions checks (use with caution)
  * @param {string} [options.session] - optional session ID to use for the session
  * @param {string} options.prompt - the user prompt to pass to `opencode`
@@ -62,6 +63,7 @@ function buildCliArgs({
   agent,
   variant,
   thinking,
+  pure,
   dangerouslySkipPermissions,
   session,
   prompt,
@@ -71,6 +73,7 @@ function buildCliArgs({
   if (agent) args.push("--agent", agent);
   if (variant) args.push("--variant", variant);
   if (thinking) args.push("--thinking");
+  if (pure) args.push("--pure");
   if (dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
   if (session) args.push("--session", session);
   args.push("--", prompt);
@@ -87,6 +90,7 @@ function buildCliArgs({
  * @param {string} [options.agent] - optional agent name to use for the session
  * @param {string} [options.variant] - optional variant name to use for the session
  * @param {boolean} [options.thinking=false] - whether to enable thinking mode
+ * @param {boolean} [options.pure=false] - whether to run without external plugins
  * @param {boolean} [options.dangerouslySkipPermissions=false] - whether to skip permissions checks (use with caution)
  * @param {string} [options.session] - optional session ID to use for the session
  * @param {string} [options.ccSessionId] - optional cc session ID to associate with this opencode session (e.g. "s1")
@@ -102,6 +106,7 @@ export async function startSpawn({
   agent = null,
   variant = null,
   thinking = false,
+  pure = false,
   dangerouslySkipPermissions = false,
   session = null,
   ccSessionId = null,
@@ -134,6 +139,7 @@ export async function startSpawn({
     agent,
     variant,
     thinking,
+    pure,
     dangerouslySkipPermissions,
     session,
     prompt,

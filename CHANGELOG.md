@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.3 — 2026-06-01
+
+- New `/oc:spawn --pure` flag, passed straight through to `opencode run --pure` to run without external plugins. Boolean, optional, off by default — same wiring as `--thinking`. Documented in `README.md`, `commands/spawn.md`, and the `oc.mjs` help text.
+
 ## 0.5.2 — 2026-05-30
 
 - New bundled `reference/recovery.md` — a guide Claude reads on a failed or stalled spawn: find a valid model (`opencode models [--refresh]`) / agent (`opencode agent list`), list a model's `--variant` tiers, decode startup errors (model-not-found, insufficient-balance, auth), and handle the one failure cc-oc can't see — a provider usage limit (`429 usage_limit_reached`, retried silently inside opencode and never emitted to the `--format json` stream, so the session just sits `running`). Fixes are framed as options to offer the user, not actions to take unprompted.

@@ -44,6 +44,7 @@ Flags (all optional, all pass through to `opencode run`):
 | `--agent <name>` | Pin a specific opencode agent |
 | `--variant <tier>` | Reasoning-effort variant (provider-specific) |
 | `--thinking` | Show reasoning blocks in the event stream |
+| `--pure` | Run opencode without external plugins |
 | `--dangerously-skip-permissions` | Bypass opencode's permission prompts for this spawn |
 | `--session <sid>` | Resume that specific opencode session |
 

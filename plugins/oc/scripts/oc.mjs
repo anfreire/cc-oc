@@ -20,6 +20,7 @@ const ARGS_SPEC = {
     agent: { type: "string" },
     variant: { type: "string" },
     thinking: { type: "boolean" },
+    pure: { type: "boolean" },
     "dangerously-skip-permissions": { type: "boolean" },
     session: { type: "string" },
   },
@@ -176,6 +177,7 @@ async function cmdSpawn(argv) {
     agent: flags.agent || null,
     variant: flags.variant || null,
     thinking: Boolean(flags.thinking),
+    pure: Boolean(flags.pure),
     dangerouslySkipPermissions: Boolean(flags["dangerously-skip-permissions"]),
     session: flags.session || null,
     ccSessionId: ccSessionIdFromEnv(),
@@ -411,6 +413,7 @@ Spawn flags (all optional, all pass through to \`opencode run\`):
   --agent <name>                      pin an opencode agent
   --variant <tier>                    reasoning-effort variant
   --thinking                          show reasoning blocks
+  --pure                              run without external plugins
   --dangerously-skip-permissions      bypass opencode permission prompts
   --session <session-id>                     resume a specific opencode session
 
