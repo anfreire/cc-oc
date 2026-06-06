@@ -10,12 +10,17 @@ Run:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" sessions
 ```
 
-Takes no arguments. Lists every session spawned by `/oc:spawn` in the current Claude Code session, with columns:
+## Output
+
+Lists every session spawned by `/oc:spawn` in the current Claude Code session, with columns:
 
 - `session` — opencode session id
 - `activity` — when the most recent event was emitted (e.g. `5s ago`)
 - `status` — `running` / `done` / `error`
 - `prompt` — first ~60 chars of the prompt
 
-To peek at a session, use `/oc:tail <session-id>`
-To cancel a running session, use `/oc:cancel <session-id>`.
+## Related commands
+
+- `/oc:wait` — wait for a session to finish
+- `/oc:tail` — peek at a session's events
+- `/oc:cancel` — cancel a running session

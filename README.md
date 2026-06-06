@@ -2,7 +2,7 @@
 
 > Thin launcher for [opencode](https://opencode.ai) from inside [Claude Code](https://claude.ai/code).
 
-Four slash commands — `/oc:spawn`, `/oc:tail`, `/oc:sessions`, `/oc:cancel` — that wrap `opencode run`. Always detached, fire-and-forget. No config, no MCP brokerage, no abstractions on top of opencode: every flag passes straight through, every behavior comes from opencode itself. Sessions are scoped to the current Claude Code session.
+Five slash commands — `/oc:spawn`, `/oc:tail`, `/oc:wait`, `/oc:sessions`, `/oc:cancel` — that wrap `opencode run`. Always detached, fire-and-forget. No config, no MCP brokerage, no abstractions on top of opencode: every flag passes straight through, every behavior comes from opencode itself. Sessions are scoped to the current Claude Code session.
 
 No daemon, no broker, no npm dependencies. Native Node ESM.
 
@@ -57,14 +57,21 @@ On a failed start the output also prints a `recovery:` line — the absolute pat
 Peek at or stream a session's events.
 
 ```text
-/oc:tail                          # latest session in this CC session
 /oc:tail ses_abc                  # specific session (full id or unique prefix)
 /oc:tail ses_abc --follow         # block until terminal
-/oc:tail ses_abc --lines 50       # last 50 events
-/oc:tail ses_abc --lines 5 --follow   # last 5 then stream new
+/oc:tail ses_abc --events 50      # last 50 events
+/oc:tail ses_abc --events 5 --follow   # last 5 then stream new
 ```
 
-`--follow` blocks up to 15 minutes. `--lines N` defaults to 10. Combinable.
+`--follow` blocks up to 15 minutes. `--events N` defaults to 1. Combinable.
+
+### `/oc:wait`
+
+Block until a session finishes, then print a one-line summary — session id, short prompt, and an `/oc:tail` pointer. Exits `0` on done, `1` on error. Run it in the background to be notified on completion without blocking.
+
+```text
+/oc:wait ses_abc
+```
 
 ### `/oc:sessions`
 

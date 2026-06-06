@@ -18,16 +18,16 @@ Single-quote the heredoc terminator (`<<'EOF'`) to pass the prompt verbatim; dro
 
 ## Flags (all optional, all pass through to `opencode run`)
 
-| Flag | Meaning |
-|---|---|
-| `--dir <path>` | Workspace root (default: current directory) |
-| `--model <id>` | Opencode model id in `provider/model` form (e.g. `anthropic/claude-sonnet-4-6`) |
-| `--agent <name>` | Pin a specific opencode agent |
-| `--variant <tier>` | Reasoning-effort variant (provider-specific: `high`, `max`, `minimal`, …) |
-| `--thinking` | Show reasoning blocks in the event stream |
-| `--pure` | Run opencode without external plugins |
-| `--dangerously-skip-permissions` | Bypass opencode's permission prompts for this spawn |
-| `--session <session-id>` | Resume that specific opencode session |
+| Flag                             | Meaning                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------- |
+| `--dir <path>`                   | Workspace root (default: current directory)                                     |
+| `--model <id>`                   | Opencode model id in `provider/model` form (e.g. `anthropic/claude-sonnet-4-6`) |
+| `--agent <name>`                 | Pin a specific opencode agent                                                   |
+| `--variant <tier>`               | Reasoning-effort variant (provider-specific: `high`, `max`, `minimal`, …)       |
+| `--thinking`                     | Show reasoning blocks in the event stream                                       |
+| `--pure`                         | Run opencode without external plugins                                           |
+| `--dangerously-skip-permissions` | Bypass opencode's permission prompts for this spawn                             |
+| `--session <session-id>`         | Resume that specific opencode session                                           |
 
 cc-oc does not validate flag values — opencode does. If a model / agent / variant id is wrong, opencode will reject it during the 20s startup probe and cc-oc surfaces the error inline.
 
@@ -42,10 +42,13 @@ Two shapes:
    log:     <path>
 
    Next:
-     /oc:tail <id>           peek (last 10 events)
-     /oc:tail <id> --follow  wait for completion
+     /oc:tail <id>           peek (last event)
+     /oc:tail <id> --follow  watch live
      /oc:cancel <id>         abort
      /oc:sessions            list sessions
+
+   Notify when done (run_in_background):
+     node <abs>/scripts/oc.mjs wait <id>
    ```
 
 2. **Failed to start.** Opencode errored during the probe phase (e.g. invalid model, agent, or variant; permissions blocked; network error connecting to the provider). The error message from opencode is surfaced inline.
@@ -56,4 +59,10 @@ Two shapes:
    recovery: <path to reference/recovery.md>
    ```
 
-On any failure — or a session stuck `running` with no new events (usage limit) — read the `recovery:` file above (`reference/recovery.md`) for how to find models/agents, decode the error, and resume.
+    On any failure — or a session stuck `running` with no new events (usage limit) — read the `recovery:` file above (`reference/recovery.md`) for how to find models/agents, decode the error, and resume.
+
+## Related commands
+
+- `/oc:wait` — wait for a session to finish
+- `/oc:tail` — peek at a session's events
+- `/oc:cancel` — cancel a running session

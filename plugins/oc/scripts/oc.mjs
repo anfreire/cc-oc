@@ -12,7 +12,7 @@ import { readDigest, followLog, readLogState } from "./lib/tail.mjs";
 import { findOpencodeBinary } from "./lib/opencode-bin.mjs";
 import { findSession, listSessions, logsDir } from "./lib/ledger.mjs";
 
-const SUBCMDS = new Set(["spawn", "tail", "sessions", "cancel", "gc"]);
+const SUBCMDS = new Set(["spawn", "tail", "wait", "sessions", "cancel", "gc"]);
 const ARGS_SPEC = {
   spawn: {
     dir: { type: "string" },
@@ -28,6 +28,7 @@ const ARGS_SPEC = {
     follow: { type: "boolean" },
     events: { type: "string" },
   },
+  wait: {},
   sessions: {},
   cancel: {},
   gc: {},
@@ -204,14 +205,19 @@ async function cmdSpawn(argv) {
   process.stdout.write(`\n`);
   process.stdout.write(`Next:\n`);
   process.stdout.write(
-    `  /oc:tail ${result.sessionId}           peek (last 10 events)\n`,
+    `  /oc:tail ${result.sessionId}           peek (last event)\n`,
   );
   process.stdout.write(
-    `  /oc:tail ${result.sessionId} --follow  wait for completion\n`,
+    `  /oc:tail ${result.sessionId} --follow  watch live\n`,
   );
   process.stdout.write(`  /oc:cancel ${result.sessionId}           abort\n`);
   process.stdout.write(
     `  /oc:sessions ${" ".repeat(result.sessionId.length)}           list sessions\n`,
+  );
+  process.stdout.write(`\n`);
+  process.stdout.write(`Notify when done (run_in_background):\n`);
+  process.stdout.write(
+    `  node ${fileURLToPath(import.meta.url)} wait ${result.sessionId}\n`,
   );
 }
 
@@ -228,7 +234,7 @@ async function cmdTail(argv) {
     );
   }
 
-  let count = 10;
+  let count = 1;
   if (flags.events !== undefined) {
     const n = Number(flags.events);
     if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
@@ -271,6 +277,38 @@ async function cmdTail(argv) {
   if (!flags.follow && record.status === "running") {
     process.stdout.write(`\n(session still running; use --follow to wait)\n`);
   }
+}
+
+/**
+ * Handles the `wait` subcommand, which blocks until a spawned OpenCode session reaches a terminal state, then prints a one-line summary — session id, short prompt, and an `/oc:tail` pointer — exiting 0 on done or 1 on error. It deliberately does not echo the session output, so backgrounding it notifies on completion without bloating the caller's context; tail the session to see the result on demand. The opencode process dying is the only termination signal, so every terminal state is surfaced, not just success.
+ * @param {string[]} argv - the command-line arguments passed to the `wait` subcommand (excluding the subcommand itself)
+ * @returns {Promise<void>} a promise that resolves when the command has completed
+ */
+async function cmdWait(argv) {
+  const { positionals } = parseArgs(argv, ARGS_SPEC.wait);
+  if (positionals.length !== 1) die("usage: /oc:wait <session-id>");
+
+  const env = process.env;
+  let record = findSession(positionals[0], env);
+  if (!record) die(`no session matches "${positionals[0]}"`);
+
+  record = reconcileSessionState(record, env);
+  while (record.status === "running") {
+    await new Promise((r) => setTimeout(r, 1000));
+    record = reconcileSessionState(record, env);
+  }
+
+  const prompt = record.promptSummary || "";
+  if (record.status === "error") {
+    process.stdout.write(
+      `session ${record.sessionId} (${prompt}) got an error — /oc:tail ${record.sessionId}\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(
+    `session ${record.sessionId} (${prompt}) has finished — /oc:tail ${record.sessionId}\n`,
+  );
 }
 
 /**
@@ -404,6 +442,7 @@ const HELP = `oc <subcommand> [args]
 Subcommands:
   spawn     start an opencode session (prompt on stdin via heredoc)
   tail      stream or peek a session's events
+  wait      block until a session finishes (background it for a completion notification)
   sessions  list sessions in this Claude Code session
   cancel    abort a running session
 
@@ -419,7 +458,7 @@ Spawn flags (all optional, all pass through to \`opencode run\`):
 
 Tail flags:
   --follow                            block until the session finishes
-  --events <n>                        last N events (default 10; combinable with --follow)
+  --events <n>                        last N events (default 1; combinable with --follow)
 `;
 
 async function main() {
@@ -434,6 +473,7 @@ async function main() {
   try {
     if (sub === "spawn") await cmdSpawn(rest);
     else if (sub === "tail") await cmdTail(rest);
+    else if (sub === "wait") await cmdWait(rest);
     else if (sub === "sessions") await cmdSessions(rest);
     else if (sub === "cancel") await cmdCancel(rest);
     else if (sub === "gc") await cmdGc(rest);

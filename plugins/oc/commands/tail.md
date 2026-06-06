@@ -12,6 +12,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail <session-id> [--follow] [--even
 
 ## Arguments
 
-- `session-id` (required) — the id of an opencode session (e.g. from `oc:sessions` or the output of sucessfull `oc:spawn`).
+- `session-id` (required) — the id of an opencode session (e.g. from `oc:sessions` or the output of successful `oc:spawn`).
 - `--follow` (optional) — block until the opencode process exits or bash times out, streaming events as they come in. If not set, only the most recent events are shown (see `--events`).
-- `--events <N>` (optional) — how many recent events to show (default: 10).
+- `--events <N>` (optional) — how many recent events to show (default: 1).

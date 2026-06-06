@@ -329,10 +329,10 @@ export function readLogState(logFile) {
  *
  * @param {string} logFile - the file path to the session's log file
  * @param {Object} [options] - optional parameters
- * @param {number|null} [options.count=10] - the number of events from the end of the log to include in the digest; if null, includes all events; if 0, includes none
+ * @param {number|null} [options.count=1] - the number of events from the end of the log to include in the digest; if null, includes all events; if 0, includes none
  * @returns {{ digest: string, fileSize: number, baseTimestamp: number|null }} the rendered digest, current file size in bytes, and the first event's timestamp for follow-mode continuity
  */
-export function readDigest(logFile, { count = 10 } = {}) {
+export function readDigest(logFile, { count = 1 } = {}) {
   if (!fs.existsSync(logFile))
     return { digest: "", fileSize: 0, baseTimestamp: null };
   const stat = fs.statSync(logFile);

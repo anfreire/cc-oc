@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 — 2026-06-06
+
+- New `/oc:wait <id>` command (and `oc.mjs wait` subcommand): blocks until a session reaches a terminal state, then prints a one-line summary — session id, short prompt, and an `/oc:tail` pointer — exiting `0` on done, `1` on error. It deliberately does not echo the session output, so backgrounding it gives a single completion notification without bloating the caller's context. Built on the same pid-liveness signal as `--follow`, so it surfaces every terminal state (done, error, crash), not just success.
+- `/oc:tail` `--events` now defaults to `1` (was `10`) — a plain `/oc:tail <id>` shows just the latest event; pass `--events N` for more.
+- `/oc:spawn` output now ends with a "Notify when done" line pointing at the backgrounded `wait` monitor.
+- Docs: `README.md` tail section corrected (`--lines` → `--events`, default `1`) and a `/oc:wait` section added; `sucessfull` → `successful` typo swept across the command docs; assorted JSDoc / usage-string consistency fixes.
+
 ## 0.5.3 — 2026-06-01
 
 - New `/oc:spawn --pure` flag, passed straight through to `opencode run --pure` to run without external plugins. Boolean, optional, off by default — same wiring as `--thinking`. Documented in `README.md`, `commands/spawn.md`, and the `oc.mjs` help text.
