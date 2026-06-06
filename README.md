@@ -67,7 +67,7 @@ Peek at or stream a session's events.
 
 ### `/oc:wait`
 
-Block until a session finishes, then print a one-line summary — session id, short prompt, and an `/oc:tail` pointer. Exits `0` on done, `1` on error. Run it in the background to be notified on completion without blocking.
+Block until a session finishes, then print a one-line summary — session id, the session's title (or prompt), and an `/oc:tail` pointer. Exits `0` on done, `1` on error. Run it in the background to be notified on completion without blocking.
 
 ```text
 /oc:wait ses_abc

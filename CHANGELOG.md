@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 — 2026-06-06
+
+- `/oc:sessions` and `/oc:wait` now show opencode's own generated session **title** (e.g. "Adversarial review of cc-oc wait changes") instead of a 72-char truncation of the raw prompt, read live from `opencode session list --format json`. Falls back to the prompt summary whenever a real title isn't available — opencode's `New session - <ts>` placeholder, an empty title, or any failure (binary missing, non-zero exit, bad JSON, 3s timeout). New `sessionTitles()` helper in `lib/opencode-bin.mjs`; no ledger schema change, no caching, no new deps.
+
 ## 0.6.0 — 2026-06-06
 
 - New `/oc:wait <id>` command (and `oc.mjs wait` subcommand): blocks until a session reaches a terminal state, then prints a one-line summary — session id, short prompt, and an `/oc:tail` pointer — exiting `0` on done, `1` on error. It deliberately does not echo the session output, so backgrounding it gives a single completion notification without bloating the caller's context. Built on the same pid-liveness signal as `--follow`, so it surfaces every terminal state (done, error, crash), not just success.

@@ -9,7 +9,7 @@ import {
   cancelSession,
 } from "./lib/spawn.mjs";
 import { readDigest, followLog, readLogState } from "./lib/tail.mjs";
-import { findOpencodeBinary } from "./lib/opencode-bin.mjs";
+import { findOpencodeBinary, sessionTitles } from "./lib/opencode-bin.mjs";
 import { findSession, listSessions, logsDir } from "./lib/ledger.mjs";
 
 const SUBCMDS = new Set(["spawn", "tail", "wait", "sessions", "cancel", "gc"]);
@@ -298,16 +298,17 @@ async function cmdWait(argv) {
     record = reconcileSessionState(record, env);
   }
 
-  const prompt = record.promptSummary || "";
+  const label =
+    sessionTitles(env).get(record.sessionId) || record.promptSummary || "";
   if (record.status === "error") {
     process.stdout.write(
-      `session ${record.sessionId} (${prompt}) got an error — /oc:tail ${record.sessionId}\n`,
+      `session ${record.sessionId} (${label}) got an error — /oc:tail ${record.sessionId}\n`,
     );
     process.exitCode = 1;
     return;
   }
   process.stdout.write(
-    `session ${record.sessionId} (${prompt}) has finished — /oc:tail ${record.sessionId}\n`,
+    `session ${record.sessionId} (${label}) has finished — /oc:tail ${record.sessionId}\n`,
   );
 }
 
@@ -339,11 +340,12 @@ async function cmdSessions(argv) {
     return;
   }
 
+  const titles = sessionTitles(env);
   const rows = sessions.map((s) => ({
     sessionId: s.sessionId,
     activity: relTime(s.logFile ? readLogState(s.logFile).lastEventAt : null),
     status: s.status,
-    prompt: s.promptSummary || "",
+    prompt: titles.get(s.sessionId) || s.promptSummary || "",
   }));
 
   const idW = Math.max("session".length, ...rows.map((r) => r.sessionId.length));
