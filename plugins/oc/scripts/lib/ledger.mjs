@@ -8,7 +8,7 @@ import { pluginDataRoot } from "./paths.mjs";
  * @property {string} sessionId - opaque unique id for this session (e.g. "a1b2c3d4")
  * @property {string} ccSessionId - the cc session this opencode session is associated with (e.g. "s1")
  * @property {string} prompt - the user prompt that triggered this session
- * @property {string} status - one of "running", "completed", "failed"
+ * @property {string} status - one of "running", "done", "error", "cancelled"
  * @property {string} updatedAt - ISO timestamp of last update to this record
  */
 

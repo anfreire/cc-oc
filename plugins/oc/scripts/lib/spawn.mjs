@@ -15,7 +15,7 @@ import {
 /** @import { SessionRecord } from "./ledger.mjs" */
 
 const PROBE_MS = 20000; // How long to wait for the first session event after spawning opencode before giving up
-const TERMINAL_STATUSES = new Set(["done", "error"]);
+const TERMINAL_STATUSES = new Set(["done", "error", "cancelled"]);
 
 /**
  * Attempts to kill a process group with the given PID. This is done by sending a SIGTERM signal to the negative of the PID, which targets the entire process group.
@@ -344,6 +344,17 @@ export function reconcileSessionState(record, env = process.env) {
   if (TERMINAL_STATUSES.has(record.status)) return record;
   if (!record.pid || isPidAlive(record.pid)) return record;
 
+  // The pid is gone, but our in-memory record may be stale: a concurrent
+  // `cancel` (or another reconcile) can have written a terminal status — most
+  // importantly "cancelled" — to the ledger. Trust that over re-deriving from
+  // the log, where a session killed mid-answer is indistinguishable from a
+  // clean finish. Without this, a backgrounded `wait` would re-derive "done"
+  // and surface the partial text as a clean answer.
+  const persisted = loadIndex(env).sessions.find(
+    (s) => s.sessionId === record.sessionId,
+  );
+  if (persisted && TERMINAL_STATUSES.has(persisted.status)) return persisted;
+
   let status, errorMessage;
   if (!fs.existsSync(record.logFile)) {
     status = "error";
@@ -374,12 +385,26 @@ export function reconcileSessionState(record, env = process.env) {
 }
 
 /**
- * Attempts to cancel a session by sending an abort command to the `opencode` process if a session ID and `opencode` binary path are available, and then killing the process group. It also updates the session record in the ledger to mark it as done with a completed timestamp. This function is used to gracefully handle session cancellations initiated by the user.
+ * Attempts to cancel a session by sending an abort command to the `opencode` process if a session ID and `opencode` binary path are available, and then killing the process group. The session record is marked "cancelled" (a distinct terminal status, not "done") so that callers — notably `wait` — report it as cancelled rather than surfacing whatever partial output the agent had produced as a clean answer. This function is used to gracefully handle session cancellations initiated by the user.
  * @param {SessionRecord} record - the session record to cancel
  * @param {NodeJS.ProcessEnv} [env=process.env] - Optional environment variables to determine paths; defaults to the current process's environment.
  * @param {string|null} [opencodeBin=null] - the path to the `opencode` binary to use for sending the abort command; if null, the abort command will not be sent
  */
 export function cancelSession(record, env = process.env, opencodeBin = null) {
+  // Record the cancellation intent before touching the process. Once the pid
+  // dies, reconcileSessionState can no longer distinguish a killed-mid-answer
+  // session from a clean finish, so the ledger must already read "cancelled" —
+  // otherwise a concurrent (e.g. backgrounded) `wait` derives "done" the moment
+  // the pid goes and reports the partial output as a finished answer.
+  upsertSession(
+    {
+      sessionId: record.sessionId,
+      status: "cancelled",
+      completedAt: new Date().toISOString(),
+    },
+    env,
+  );
+
   if (record.sessionId && opencodeBin) {
     try {
       spawnSync(opencodeBin, ["session", "abort", record.sessionId], {
@@ -389,14 +414,6 @@ export function cancelSession(record, env = process.env, opencodeBin = null) {
       });
     } catch {}
   }
-  
+
   killGroup(record.pid);
-  upsertSession(
-    {
-      sessionId: record.sessionId,
-      status: "done",
-      completedAt: new Date().toISOString(),
-    },
-    env,
-  );
 }

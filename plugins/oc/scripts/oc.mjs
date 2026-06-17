@@ -292,7 +292,9 @@ async function cmdTail(argv) {
  * `wait` returns the deliverable, not the noise. For a pure completion barrier
  * with no output, redirect: `wait <id> > /dev/null` (errors still surface on
  * stderr). The opencode process dying is the only termination signal, so every
- * terminal state is surfaced, not just success.
+ * terminal state is surfaced, not just success. A session cancelled via
+ * `/oc:cancel` is reported as cancelled (stderr, exit 1) rather than having its
+ * partial output passed off as a clean answer.
  * @param {string[]} argv - the command-line arguments passed to the `wait` subcommand (excluding the subcommand itself)
  * @returns {Promise<void>} a promise that resolves when the command has completed
  */
@@ -308,6 +310,17 @@ async function cmdWait(argv) {
   while (record.status === "running") {
     await new Promise((r) => setTimeout(r, 1000));
     record = reconcileSessionState(record, env);
+  }
+
+  // A cancelled session is terminal but not a clean finish: its log may hold
+  // partial model text that must not be passed off as the answer. Report the
+  // cancellation and exit 1 rather than emitting that partial text.
+  if (record.status === "cancelled") {
+    process.stderr.write(
+      `session ${record.sessionId} cancelled\n`,
+    );
+    process.exitCode = 1;
+    return;
   }
 
   const state = readLogState(record.logFile);

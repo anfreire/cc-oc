@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2 — 2026-06-17
+
+- **A cancelled session is no longer reported as a clean answer.** `/oc:cancel` used to stamp the session `done`, so a session killed mid-answer left partial model text in its log that `/oc:wait` then printed to stdout as if it were the finished result. Cancellation now records a distinct terminal status, `cancelled`, and `wait` reports `session <id> cancelled` on stderr (exit 1) instead of emitting the partial text.
+- **Cancellation survives reconciliation, including the backgrounded-`wait` race.** `cancelSession` records the `cancelled` status *before* aborting/killing the process, and `reconcileSessionState` now trusts a persisted terminal status over re-deriving from a dead pid — where a killed-mid-answer session is indistinguishable from a clean finish. Without this, a `wait` already backgrounded on the session would re-derive `done` the moment the pid died and surface the partial output anyway. The `SessionRecord.status` typedef was also corrected (it read `"completed"/"failed"`, never the real `done`/`error`).
+
 ## 0.7.1 — 2026-06-17
 
 - **`findSession` treats an empty id as "not found".** A blank or missing session id previously hit `startsWith("")` and matched *every* session, so `/oc:wait ""` and `/oc:cancel ""` reported `ambiguous … matches N sessions` instead of a clean miss. An early guard now returns `null` before the lookup, so all three callers (`wait` / `tail` / `cancel`) surface their normal "no session" message.
