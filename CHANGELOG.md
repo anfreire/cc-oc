@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 — 2026-06-17
+
+- **`findSession` treats an empty id as "not found".** A blank or missing session id previously hit `startsWith("")` and matched *every* session, so `/oc:wait ""` and `/oc:cancel ""` reported `ambiguous … matches N sessions` instead of a clean miss. An early guard now returns `null` before the lookup, so all three callers (`wait` / `tail` / `cancel`) surface their normal "no session" message.
+- **`marketplace.json` plugin description now lists `wait`.** It read `Spawn / tail / sessions / cancel`, omitting the `wait` command that has shipped since 0.6.0; it now matches `plugin.json`'s `Spawn / tail / wait / sessions / cancel`.
+
 ## 0.7.0 — 2026-06-17
 
 **`/oc:wait` now returns the result; `/oc:tail` is purely an events viewer.** Reading an agent's answer used to mean `spawn → wait → tail`, but `wait` only printed a pointer and a plain `/oc:tail <id>` (default `--events 1`) rendered the terminal `step_finish` to nothing — so it came back empty on nearly every finished session and callers fell back to parsing the raw NDJSON. The two jobs are now split cleanly: `wait` gets the answer, `tail` shows the event trace.

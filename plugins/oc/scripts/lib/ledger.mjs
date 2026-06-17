@@ -190,12 +190,13 @@ export function upsertSession(record, env = process.env) {
 }
 
 /**
- * Finds a session record by its `sessionId`. If an exact match isn't found, attempts to find a unique partial match where the `sessionId` starts with the given string (e.g. "a1b2c3" would match "a1b2c3d4"). If multiple partial matches are found, an error is thrown due to ambiguity. If no matches are found, null is returned.
+ * Finds a session record by its `sessionId`. If an exact match isn't found, attempts to find a unique partial match where the `sessionId` starts with the given string (e.g. "a1b2c3" would match "a1b2c3d4"). If multiple partial matches are found, an error is thrown due to ambiguity. If no matches are found, null is returned. An empty or missing `sessionId` is treated as "not found" rather than matching every session via `startsWith("")`.
  * @param {string} sessionId - the session id to search for (can be full or prefix)
  * @param {NodeJS.ProcessEnv} [env=process.env] - Optional environment variables to determine paths; defaults to the current process's environment.
  * @returns {SessionRecord|null} the matching session record, or null if not found
  */
 export function findSession(sessionId, env = process.env) {
+  if (!sessionId) return null;
   const idx = loadIndex(env);
   const exact = idx.sessions.find((s) => s.sessionId === sessionId);
   if (exact) return exact;
