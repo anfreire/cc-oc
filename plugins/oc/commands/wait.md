@@ -1,5 +1,5 @@
 ---
-description: Block until an opencode session finishes.
+description: Block until an opencode session finishes, then print its final answer.
 argument-hint: "<session-id>"
 allowed-tools: Bash(node:*)
 ---
@@ -16,5 +16,5 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" wait <session-id>
 
 ## Usage
 
-- **To be notified when it finishes** — run it in the background (`run_in_background: true`); you get one notification when the session ends.
-- **To block until it finishes** — run it directly.
+- **To get the answer when it finishes** — run it in the background (`run_in_background: true`); the completion notification carries the final answer.
+- **To block and read the answer now** — run it directly.

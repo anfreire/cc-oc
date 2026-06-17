@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 — 2026-06-17
+
+**`/oc:wait` now returns the result; `/oc:tail` is purely an events viewer.** Reading an agent's answer used to mean `spawn → wait → tail`, but `wait` only printed a pointer and a plain `/oc:tail <id>` (default `--events 1`) rendered the terminal `step_finish` to nothing — so it came back empty on nearly every finished session and callers fell back to parsing the raw NDJSON. The two jobs are now split cleanly: `wait` gets the answer, `tail` shows the event trace.
+
+### Changed
+
+- **`/oc:wait <id>` prints the session's final answer.** On a clean finish it writes the model's final answer (text since the last step boundary) to stdout and exits `0`; on failure it writes `session <id> error: <message>` to stderr and exits `1`. A logged `error` event counts as a failure even when the ledger says `done`. This is the canonical "get the answer" path — background it and the completion notification carries the answer, with no separate read step. For a pure completion barrier, redirect `wait <id> > /dev/null` (errors still surface on stderr). Was: a one-line `finished — /oc:tail <id>` pointer.
+- **`/oc:spawn` output reframed** around the new flow — a "Get the answer" line pointing at the backgroundable `wait`, then a "Watch or inspect events" block for `tail` / `cancel` / `sessions`.
+
+### Fixed
+
+- **`readDigest` renders, then slices.** `--events N` now counts *renderable* events: every event is rendered and the structural ones (`step_start` / `step_finish` / empty text) dropped before the last N are taken. A finished session ends on `step_finish`, so the old slice-then-render order made a plain `/oc:tail <id>` come back empty; the last renderable event of a finished session is now its final answer block.
+- **`/oc:spawn` follow-up list now aligns with `String.padEnd`** instead of hand-counted spaces (and a `" ".repeat(id.length)` hack) that drifted as the command width varied.
+
+### Docs
+
+- `README.md`, `commands/{wait,tail,spawn}.md`, and the `oc.mjs` help text updated for the wait/tail split. `LogState.finalText` JSDoc corrected to "text since the most recent step boundary".
+
 ## 0.6.1 — 2026-06-06
 
 - `/oc:sessions` and `/oc:wait` now show opencode's own generated session **title** (e.g. "Adversarial review of cc-oc wait changes") instead of a 72-char truncation of the raw prompt, read live from `opencode session list --format json`. Falls back to the prompt summary whenever a real title isn't available — opencode's `New session - <ts>` placeholder, an empty title, or any failure (binary missing, non-zero exit, bad JSON, 3s timeout). New `sessionTitles()` helper in `lib/opencode-bin.mjs`; no ledger schema change, no caching, no new deps.

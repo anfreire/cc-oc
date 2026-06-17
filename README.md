@@ -54,20 +54,20 @@ On a failed start the output also prints a `recovery:` line — the absolute pat
 
 ### `/oc:tail`
 
-Peek at or stream a session's events.
+Peek at or stream a session's **event trace** (tool calls, model text, errors) — for watching progress or debugging. To get the agent's final answer, use `/oc:wait`.
 
 ```text
 /oc:tail ses_abc                  # specific session (full id or unique prefix)
-/oc:tail ses_abc --follow         # block until terminal
+/oc:tail ses_abc --follow         # stream live until terminal
 /oc:tail ses_abc --events 50      # last 50 events
 /oc:tail ses_abc --events 5 --follow   # last 5 then stream new
 ```
 
-`--follow` blocks up to 15 minutes. `--events N` defaults to 1. Combinable.
+`--follow` blocks up to 15 minutes. `--events N` defaults to 1 and counts *renderable* events (structural events like `step_finish` never make it come back empty). Combinable.
 
 ### `/oc:wait`
 
-Block until a session finishes, then print a one-line summary — session id, the session's title (or prompt), and an `/oc:tail` pointer. Exits `0` on done, `1` on error. Run it in the background to be notified on completion without blocking.
+Block until a session finishes, then **return the result**: the agent's final answer on stdout (exit `0`), or `session <id> error: <message>` on stderr (exit `1`) on failure. This is the canonical way to get an answer — run it in the background and the completion notification carries the answer, no separate read step.
 
 ```text
 /oc:wait ses_abc

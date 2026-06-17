@@ -41,14 +41,14 @@ Two shapes:
    session: <id>
    log:     <path>
 
-   Next:
-     /oc:tail <id>           peek (last event)
-     /oc:tail <id> --follow  watch live
+   Get the answer (blocks; run_in_background to be pinged when ready):
+     node <abs>/scripts/oc.mjs wait <id>
+
+   Watch or inspect events:
+     /oc:tail <id>           peek last events
+     /oc:tail <id> --follow  stream live events
      /oc:cancel <id>         abort
      /oc:sessions            list sessions
-
-   Notify when done (run_in_background):
-     node <abs>/scripts/oc.mjs wait <id>
    ```
 
 2. **Failed to start.** Opencode errored during the probe phase (e.g. invalid model, agent, or variant; permissions blocked; network error connecting to the provider). The error message from opencode is surfaced inline.
@@ -63,6 +63,6 @@ Two shapes:
 
 ## Related commands
 
-- `/oc:wait` — wait for a session to finish
-- `/oc:tail` — peek at a session's events
+- `/oc:wait` — wait for a session to finish, then print its final answer
+- `/oc:tail` — stream or peek a session's events
 - `/oc:cancel` — cancel a running session

@@ -203,22 +203,25 @@ async function cmdSpawn(argv) {
   process.stdout.write(`session: ${result.sessionId}\n`);
   process.stdout.write(`log:     ${result.logFile}\n`);
   process.stdout.write(`\n`);
-  process.stdout.write(`Next:\n`);
   process.stdout.write(
-    `  /oc:tail ${result.sessionId}           peek (last event)\n`,
+    `Get the answer (blocks; run_in_background to be pinged when ready):\n`,
   );
-  process.stdout.write(
-    `  /oc:tail ${result.sessionId} --follow  watch live\n`,
-  );
-  process.stdout.write(`  /oc:cancel ${result.sessionId}           abort\n`);
-  process.stdout.write(
-    `  /oc:sessions ${" ".repeat(result.sessionId.length)}           list sessions\n`,
-  );
-  process.stdout.write(`\n`);
-  process.stdout.write(`Notify when done (run_in_background):\n`);
   process.stdout.write(
     `  node ${fileURLToPath(import.meta.url)} wait ${result.sessionId}\n`,
   );
+  process.stdout.write(`\n`);
+  process.stdout.write(`Watch or inspect events:\n`);
+  const sid = result.sessionId;
+  const rows = [
+    [`/oc:tail ${sid}`, "peek last events"],
+    [`/oc:tail ${sid} --follow`, "stream live events"],
+    [`/oc:cancel ${sid}`, "abort"],
+    [`/oc:sessions`, "list sessions"],
+  ];
+  const cmdWidth = Math.max(...rows.map(([cmd]) => cmd.length));
+  for (const [cmd, desc] of rows) {
+    process.stdout.write(`  ${cmd.padEnd(cmdWidth)}  ${desc}\n`);
+  }
 }
 
 /**
@@ -280,7 +283,16 @@ async function cmdTail(argv) {
 }
 
 /**
- * Handles the `wait` subcommand, which blocks until a spawned OpenCode session reaches a terminal state, then prints a one-line summary — session id, short prompt, and an `/oc:tail` pointer — exiting 0 on done or 1 on error. It deliberately does not echo the session output, so backgrounding it notifies on completion without bloating the caller's context; tail the session to see the result on demand. The opencode process dying is the only termination signal, so every terminal state is surfaced, not just success.
+ * Handles the `wait` subcommand, which blocks until a spawned OpenCode session
+ * reaches a terminal state, then returns the result: the agent's final answer
+ * on stdout for a clean finish, or a terse error line on stderr (exit 1) on
+ * failure. This is the canonical "get the answer" path — background it
+ * (`run_in_background`) and the completion ping carries the answer, so there's
+ * no separate read step. The full event trace stays opt-in behind `tail`, so
+ * `wait` returns the deliverable, not the noise. For a pure completion barrier
+ * with no output, redirect: `wait <id> > /dev/null` (errors still surface on
+ * stderr). The opencode process dying is the only termination signal, so every
+ * terminal state is surfaced, not just success.
  * @param {string[]} argv - the command-line arguments passed to the `wait` subcommand (excluding the subcommand itself)
  * @returns {Promise<void>} a promise that resolves when the command has completed
  */
@@ -298,17 +310,28 @@ async function cmdWait(argv) {
     record = reconcileSessionState(record, env);
   }
 
-  const label =
-    sessionTitles(env).get(record.sessionId) || record.promptSummary || "";
-  if (record.status === "error") {
-    process.stdout.write(
-      `session ${record.sessionId} (${label}) got an error — /oc:tail ${record.sessionId}\n`,
-    );
+  const state = readLogState(record.logFile);
+
+  // Treat a logged error event as a failure even if the ledger says "done":
+  // a session can be stamped terminal before a late error event is written.
+  if (record.status === "error" || state.errorSeen) {
+    const msg = record.errorMessage ?? state.errorMessage ?? "(no detail)";
+    process.stderr.write(`session ${record.sessionId} error: ${msg}\n`);
     process.exitCode = 1;
     return;
   }
-  process.stdout.write(
-    `session ${record.sessionId} (${label}) has finished — /oc:tail ${record.sessionId}\n`,
+
+  // The final assistant turn (text since the last step boundary) is the take.
+  const answer = (state.finalText ?? "").replace(/\s+$/, "");
+  if (answer) {
+    process.stdout.write(answer + "\n");
+    return;
+  }
+
+  // Finished cleanly but produced no model text (e.g. a tool-only run). Keep
+  // stdout answer-only — the diagnostic goes to stderr.
+  process.stderr.write(
+    `session ${record.sessionId} finished with no model text — see /oc:tail ${record.sessionId}\n`,
   );
 }
 
@@ -443,8 +466,8 @@ const HELP = `oc <subcommand> [args]
 
 Subcommands:
   spawn     start an opencode session (prompt on stdin via heredoc)
+  wait      block until a session finishes, then print its final answer (or error)
   tail      stream or peek a session's events
-  wait      block until a session finishes (background it for a completion notification)
   sessions  list sessions in this Claude Code session
   cancel    abort a running session
 
@@ -458,9 +481,9 @@ Spawn flags (all optional, all pass through to \`opencode run\`):
   --dangerously-skip-permissions      bypass opencode permission prompts
   --session <session-id>                     resume a specific opencode session
 
-Tail flags:
-  --follow                            block until the session finishes
-  --events <n>                        last N events (default 1; combinable with --follow)
+Tail flags (\`tail\` shows the event trace; use \`wait\` to get the final answer):
+  --follow                            stream events live until the session finishes
+  --events <n>                        last N renderable events (default 1; combinable with --follow)
 `;
 
 async function main() {

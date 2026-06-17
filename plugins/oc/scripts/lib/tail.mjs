@@ -10,7 +10,7 @@ import { isErrorEvent } from "./events.mjs";
  * @property {number} eventCount - the number of events in the log file, or 0 if it cannot be read
  * @property {boolean} errorSeen - true if a session-ending error event has been emitted in the log
  * @property {string|null} errorMessage - a human-readable error message extracted from the events, or null if no error is found
- * @property {string|null} finalText - the concatenated text output from all "text" events, or null if no text events are found
+ * @property {string|null} finalText - the model's final answer: text emitted since the most recent step boundary (concatenated), or null if the last step produced no text
  * @property {string|null} observedSessionId - the session ID observed in the events, or null if no session ID is found
  * @property {number|null} lastEventAt - the timestamp (ms since epoch) of the most recent event in the log, or null if the log has none
  */
@@ -327,9 +327,15 @@ export function readLogState(logFile) {
  * follow-mode offset bookkeeping. Session-completion status is determined by
  * the caller from the opencode process pid, not from this digest.
  *
+ * `count` is measured in *renderable* blocks, not raw events: every event is
+ * rendered first and the null-rendering ones (`step_start`, `step_finish`,
+ * empty text) are dropped before the last `count` are taken. Slicing raw events
+ * first would let an invisible trailing event (a completed session almost always
+ * ends on `step_finish`) consume the whole budget and yield an empty digest.
+ *
  * @param {string} logFile - the file path to the session's log file
  * @param {Object} [options] - optional parameters
- * @param {number|null} [options.count=1] - the number of events from the end of the log to include in the digest; if null, includes all events; if 0, includes none
+ * @param {number|null} [options.count=1] - the number of renderable blocks from the end of the log to include in the digest; if null, includes all; if 0, includes none
  * @returns {{ digest: string, fileSize: number, baseTimestamp: number|null }} the rendered digest, current file size in bytes, and the first event's timestamp for follow-mode continuity
  */
 export function readDigest(logFile, { count = 1 } = {}) {
@@ -342,14 +348,14 @@ export function readDigest(logFile, { count = 1 } = {}) {
     events.length > 0 && typeof events[0].timestamp === "number"
       ? events[0].timestamp
       : null;
-  const sliced =
-    count === null ? events : count === 0 ? [] : events.slice(-count);
   const rendered = [];
-  for (const ev of sliced) {
+  for (const ev of events) {
     const line = renderEvent(ev, baseTimestamp);
     if (line) rendered.push(line);
   }
-  return { digest: rendered.join("\n"), fileSize: stat.size, baseTimestamp };
+  const sliced =
+    count === null ? rendered : count === 0 ? [] : rendered.slice(-count);
+  return { digest: sliced.join("\n"), fileSize: stat.size, baseTimestamp };
 }
 
 /**

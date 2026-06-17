@@ -10,8 +10,10 @@ Run:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" tail <session-id> [--follow] [--events N]
 ```
 
+`tail` shows the session's **event trace** (tool calls, model text, errors) — for watching progress or debugging. To get the agent's final answer, use `oc:wait`.
+
 ## Arguments
 
 - `session-id` (required) — the id of an opencode session (e.g. from `oc:sessions` or the output of successful `oc:spawn`).
-- `--follow` (optional) — block until the opencode process exits or bash times out, streaming events as they come in. If not set, only the most recent events are shown (see `--events`).
-- `--events <N>` (optional) — how many recent events to show (default: 1).
+- `--follow` (optional) — block until the opencode process exits or bash times out, streaming events as they come in.
+- `--events <N>` (optional) — show the last N events (default 1). Counts *renderable* events, so structural events like `step_finish` never make it come back empty. Combinable with `--follow`.
