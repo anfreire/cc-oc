@@ -29,7 +29,7 @@ Single-quote the heredoc terminator (`<<'EOF'`) to pass the prompt verbatim; dro
 | `--dangerously-skip-permissions` | Bypass opencode's permission prompts for this spawn                             |
 | `--session <session-id>`         | Resume that specific opencode session                                           |
 
-cc-oc does not validate flag values — opencode does. If a model / agent / variant id is wrong, opencode will reject it during the 20s startup probe and cc-oc surfaces the error inline.
+cc-oc does not validate flag values — opencode does. If a model / agent / variant id is wrong, opencode will reject it during the 90s startup probe and cc-oc surfaces the error inline.
 
 ## Output
 

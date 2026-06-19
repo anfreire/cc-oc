@@ -14,7 +14,7 @@ import {
 
 /** @import { SessionRecord } from "./ledger.mjs" */
 
-const PROBE_MS = 20000; // How long to wait for the first session event after spawning opencode before giving up
+const PROBE_MS = 90000; // How long to wait for the first session event after spawning opencode before giving up
 const TERMINAL_STATUSES = new Set(["done", "error", "cancelled"]);
 
 /**

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3 — 2026-06-19
+
+- **The startup probe now waits up to 90s for opencode's first event** (was 20s). The probe is what captures the real session id and surfaces startup-time rejections (bad model, bad auth, config errors) inline; a 20s budget could expire before a cold opencode start — slow provider auth, plugin loading, or a large config — produced its first event, killing a session that would otherwise have come up fine. `PROBE_MS` in `spawn.mjs` is now `90000`; the docs that quote the budget (`README.md`, `commands/spawn.md`) were updated to match.
+
 ## 0.7.2 — 2026-06-17
 
 - **A cancelled session is no longer reported as a clean answer.** `/oc:cancel` used to stamp the session `done`, so a session killed mid-answer left partial model text in its log that `/oc:wait` then printed to stdout as if it were the finished result. Cancellation now records a distinct terminal status, `cancelled`, and `wait` reports `session <id> cancelled` on stderr (exit 1) instead of emitting the partial text.

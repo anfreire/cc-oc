@@ -48,7 +48,7 @@ Flags (all optional, all pass through to `opencode run`):
 | `--dangerously-skip-permissions` | Bypass opencode's permission prompts for this spawn |
 | `--session <sid>` | Resume that specific opencode session |
 
-cc-oc does **not** validate flag values — opencode does. After spawn, cc-oc waits up to 20 seconds for opencode to emit its first event so the real session id can be captured and startup-time rejections (bad model, bad auth, config errors) surface in the spawn output. Once opencode emits its first event, cc-oc prints the session id and detaches; opencode keeps running.
+cc-oc does **not** validate flag values — opencode does. After spawn, cc-oc waits up to 90 seconds for opencode to emit its first event so the real session id can be captured and startup-time rejections (bad model, bad auth, config errors) surface in the spawn output. Once opencode emits its first event, cc-oc prints the session id and detaches; opencode keeps running.
 
 On a failed start the output also prints a `recovery:` line — the absolute path to a bundled guide (`reference/recovery.md`) covering how to find a valid model/agent, decode the provider error, and handle a session stuck `running` on a usage limit.
 
@@ -102,7 +102,7 @@ Abort a running session by id. Best-effort: `opencode session abort` first, then
 /oc:spawn "<prompt>"
   └─ spawn `opencode run --format json` detached: opencode owns its own process group,
      stdio wired to a temp log file via raw fds
-  └─ probe up to 20s for the first event:
+  └─ probe up to 90s for the first event:
        error event  → surface error, kill child, exit 1
        sessionID    → rename temp log to <sid>.ndjson, ledger entry as `running`, exit 0
        timeout      → kill child, exit 1
