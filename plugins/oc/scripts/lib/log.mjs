@@ -8,8 +8,8 @@ import { isErrorEvent } from "./events.mjs";
  * @typedef {Object} LogState
  * @property {boolean} exists - whether the log file exists and is readable
  * @property {number} eventCount - the number of events in the log file, or 0 if it cannot be read
- * @property {boolean} errorSeen - true if a session-ending error event has been emitted in the log
- * @property {string|null} errorMessage - a human-readable error message extracted from the events, or null if no error is found
+ * @property {boolean} errorSeen - true if the log ends in an unrecovered error: an error event with no model work after it. Errors opencode recovered from (e.g. by retrying on a fallback model) don't count — they stay visible in the rendered trace but don't decide the session's verdict.
+ * @property {string|null} errorMessage - a human-readable message for the last unrecovered error, or null if the log doesn't end in one
  * @property {string|null} finalText - the model's final answer: text emitted since the most recent step boundary (concatenated), or null if the last step produced no text
  * @property {string|null} observedSessionId - the session ID observed in the events, or null if no session ID is found
  * @property {number|null} lastEventAt - the timestamp (ms since epoch) of the most recent event in the log, or null if the log has none
@@ -77,7 +77,7 @@ function clip(s, max = 120) {
  * @param {OpenCodeError} event - the event from which to extract the error message
  * @returns {string} a human-readable error message extracted from the event
  */
-export function extractErrorMessage(event) {
+function extractErrorMessage(event) {
   if (!event) return "(no detail)";
 
   if (typeof event === "object") {
@@ -156,20 +156,36 @@ function summarizeToolInput(input) {
 }
 
 /**
- * Renders an `OpenCodeEvent` into a human-readable block for the tail digest.
- * Most events render to a single line; `text` and `reasoning` events fit on
- * the header line when their body is single-line and fall back to a header +
- * body block when multi-line, so the full body is preserved verbatim either
- * way (no clipping). Tool events render as `tool: <name> <input>` so the
- * trace stays informative for any tool; the model's subsequent `text` event
- * carries any output worth surfacing. Unknown event types fall through to
- * `[ts] <type>` so the stream stays informative when opencode adds event
- * kinds we haven't typed.
+ * Indents every line of a body after the first by two spaces, leaving blank
+ * lines blank. Continuation lines can then never be mistaken for event
+ * headers — in the rendered trace, flush-left always means "new event",
+ * whatever the body contains. Two spaces rather than a tab or four so a
+ * markdown re-render doesn't read continuations as code blocks.
+ *
+ * @param {string} body - the (trailing-trimmed) event body
+ * @returns {string} the body with continuation lines indented
+ */
+function indentContinuation(body) {
+  return body
+    .split("\n")
+    .map((line, i) => (i === 0 || line === "" ? line : "  " + line))
+    .join("\n");
+}
+
+/**
+ * Renders an `OpenCodeEvent` into a human-readable block for the event trace.
+ * Most events render to a single line; `text` and `reasoning` bodies start on
+ * the header line (`[ts] model: <first line>`) with continuation lines
+ * indented two spaces below — otherwise verbatim (no clipping). Tool events
+ * render as `tool: <name> <input>` so the trace stays informative for any
+ * tool; the model's subsequent `text` event carries any output worth
+ * surfacing. Unknown event types fall through to `[ts] <type>` so the trace
+ * stays informative when opencode adds event kinds we haven't typed.
  * @param {OpenCodeEvent | null | undefined} event - the event to render
  * @param {number} [baseTimestamp] - the first event's timestamp; when present, renders session-relative offsets instead of wall-clock
  * @returns {string | null} the rendered block (may span multiple lines), or null when the event carries no displayable content
  */
-export function renderEvent(event, baseTimestamp) {
+function renderEvent(event, baseTimestamp) {
   if (!event || typeof event !== "object") return null;
   const ts = tsString(event.timestamp, baseTimestamp);
 
@@ -197,17 +213,13 @@ export function renderEvent(event, baseTimestamp) {
     case "text": {
       const body = String(event.part?.text ?? "").replace(/\s+$/, "");
       if (!body) return null;
-      return body.includes("\n")
-        ? `[${ts}] model:\n${body}`
-        : `[${ts}] model: ${body}`;
+      return `[${ts}] model: ${indentContinuation(body)}`;
     }
 
     case "reasoning": {
       const body = String(event.part?.text ?? event.part?.summary ?? "").replace(/\s+$/, "");
       if (!body) return null;
-      return body.includes("\n")
-        ? `[${ts}] thinking:\n${body}`
-        : `[${ts}] thinking: ${body}`;
+      return `[${ts}] thinking: ${indentContinuation(body)}`;
     }
 
     case "tool_use": {
@@ -254,12 +266,23 @@ function parseAll(buf) {
   return out;
 }
 
+// Event kinds that prove the model moved on after an error — the session
+// recovered (e.g. opencode retried on a fallback model), so the error was
+// transient, not the verdict. `step_finish` is deliberately absent (opencode
+// could emit it while unwinding a failed step), as are `stderr` noise and
+// unknown kinds — none of those may fake a recovery.
+const PROGRESS_TYPES = new Set(["step_start", "text", "tool_use", "reasoning"]);
+const PROGRESS_PART_TYPES = new Set(["step-start", "text", "tool", "reasoning"]);
+
 /**
  * Reads the log file for a session and returns an object containing the log's
- * existence, event count, whether a session-ending error has been observed,
- * the associated error message, the final text output from the model, and the
- * observed session ID. Session termination itself is not inferred from log
- * events — the caller resolves that from the opencode process pid.
+ * existence, event count, whether the log ends in an unrecovered error, the
+ * associated error message, the final text output from the model, and the
+ * observed session ID. An error event followed by model work is treated as
+ * recovered (opencode owns retries and model fallbacks), so only an error
+ * that stands as the log's last word marks failure. Session termination
+ * itself is not inferred from log events — the caller resolves that from the
+ * opencode process pid.
  * @param {string} logFile - the file path to the session's log file
  * @returns {LogState} the parsed log state
  */
@@ -307,7 +330,10 @@ export function readLogState(logFile) {
 
     if (isErrorEvent(ev)) {
       errorSeen = true;
-      if (errorMessage === null) errorMessage = extractErrorMessage(ev);
+      errorMessage = extractErrorMessage(ev);
+    } else if (PROGRESS_TYPES.has(t) || PROGRESS_PART_TYPES.has(partType)) {
+      errorSeen = false;
+      errorMessage = null;
     }
   }
   return {
@@ -322,27 +348,23 @@ export function readLogState(logFile) {
 }
 
 /**
- * Reads the last N events from a session log file and returns a digest string
- * that can be displayed in a UI, along with the log's current file size for
- * follow-mode offset bookkeeping. Session-completion status is determined by
- * the caller from the opencode process pid, not from this digest.
- *
- * `count` is measured in *renderable* blocks, not raw events: every event is
- * rendered first and the null-rendering ones (`step_start`, `step_finish`,
- * empty text) are dropped before the last `count` are taken. Slicing raw events
- * first would let an invisible trailing event (a completed session almost always
- * ends on `step_finish`) consume the whole budget and yield an empty digest.
+ * Renders a session log into its full event trace: every event in order
+ * through `renderEvent`, with timestamps relative to the first event and the
+ * null-rendering structural events (`step_start`, `step_finish`, empty text)
+ * dropped. Returns "" when the log is missing, unreadable, or holds no
+ * renderable events, so callers emit one output shape regardless of session
+ * state.
  *
  * @param {string} logFile - the file path to the session's log file
- * @param {Object} [options] - optional parameters
- * @param {number|null} [options.count=1] - the number of renderable blocks from the end of the log to include in the digest; if null, includes all; if 0, includes none
- * @returns {{ digest: string, fileSize: number, baseTimestamp: number|null }} the rendered digest, current file size in bytes, and the first event's timestamp for follow-mode continuity
+ * @returns {string} the rendered trace, or "" when there is nothing to show
  */
-export function readDigest(logFile, { count = 1 } = {}) {
-  if (!fs.existsSync(logFile))
-    return { digest: "", fileSize: 0, baseTimestamp: null };
-  const stat = fs.statSync(logFile);
-  const raw = fs.readFileSync(logFile, "utf8");
+export function renderLog(logFile) {
+  let raw;
+  try {
+    raw = fs.readFileSync(logFile, "utf8");
+  } catch {
+    return "";
+  }
   const events = parseAll(raw);
   const baseTimestamp =
     events.length > 0 && typeof events[0].timestamp === "number"
@@ -353,71 +375,5 @@ export function readDigest(logFile, { count = 1 } = {}) {
     const line = renderEvent(ev, baseTimestamp);
     if (line) rendered.push(line);
   }
-  const sliced =
-    count === null ? rendered : count === 0 ? [] : rendered.slice(-count);
-  return { digest: sliced.join("\n"), fileSize: stat.size, baseTimestamp };
-}
-
-/**
- * Follows a log file in real-time, rendering new events to stdout, until the
- * opencode process identified by `pid` exits or `timeoutMs` elapses. The pid's
- * liveness is the sole signal for session end: after the process dies, one
- * final drain is performed so any trailing events are surfaced before return.
- *
- * @param {number} pid - the pid of the opencode `run` process whose exit signals session end (mandatory)
- * @param {string} logFile - the path to the log file to follow
- * @param {Object} [options] - optional parameters
- * @param {number} [options.startOffset=0] - the byte offset in the log file from which to start reading; defaults to 0
- * @param {number|null} [options.baseTimestamp=null] - the first event's timestamp from the digest phase; used for session-relative rendering continuity
- * @param {number} [options.timeoutMs=900000] - the maximum time in milliseconds to wait before giving up; defaults to 15 minutes
- * @param {number} [options.intervalMs=250] - the interval in milliseconds at which to poll the log and pid; defaults to 250 ms
- * @returns {Promise<{ timedOut: boolean }>} whether the follow timed out before the process exited
- */
-export async function followLog(
-  pid,
-  logFile,
-  {
-    startOffset = 0,
-    baseTimestamp = null,
-    timeoutMs = 15 * 60 * 1000,
-    intervalMs = 250,
-  } = {},
-) {
-  let lastSize = startOffset;
-  let lastLineFragment = "";
-  const start = Date.now();
-
-  const drain = () => {
-    if (!fs.existsSync(logFile)) return;
-    let stat;
-    try {
-      stat = fs.statSync(logFile);
-    } catch {
-      return;
-    }
-    if (stat.size <= lastSize) return;
-    const fd = fs.openSync(logFile, "r");
-    const buf = Buffer.alloc(stat.size - lastSize);
-    fs.readSync(fd, buf, 0, buf.length, lastSize);
-    fs.closeSync(fd);
-    lastSize = stat.size;
-    const text = lastLineFragment + buf.toString("utf8");
-    const lastNl = text.lastIndexOf("\n");
-    const complete = lastNl >= 0 ? text.slice(0, lastNl) : "";
-    lastLineFragment = lastNl >= 0 ? text.slice(lastNl + 1) : text;
-    for (const ev of parseAll(complete)) {
-      const line = renderEvent(ev, baseTimestamp);
-      if (line) process.stdout.write(line + "\n");
-    }
-  };
-
-  while (true) {
-    drain();
-    if (!isPidAlive(pid)) {
-      drain();
-      return { timedOut: false };
-    }
-    if (Date.now() - start > timeoutMs) return { timedOut: true };
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
+  return rendered.join("\n");
 }

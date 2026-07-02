@@ -10,11 +10,6 @@ Run:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" wait <session-id>
 ```
 
-## Arguments
+`<session-id>` is a full id or unique prefix (from `/oc:spawn` or `/oc:sessions`).
 
-- `session-id` (required) — the id of an opencode session (e.g. from `oc:sessions` or the output of successful `oc:spawn`).
-
-## Usage
-
-- **To get the answer when it finishes** — run it in the background (`run_in_background: true`); the completion notification carries the final answer.
-- **To block and read the answer now** — run it directly.
+Prints the final answer on stdout (exit 0); an errored or cancelled session reports on stderr (exit 1). Usually run in the background (`run_in_background: true`) so the completion notification carries the answer — run it directly when you want to block on it now.

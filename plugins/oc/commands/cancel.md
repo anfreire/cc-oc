@@ -10,6 +10,4 @@ Run:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" cancel <session-id>
 ```
 
-## Arguments
-
-- `session-id` (required) — the id of an opencode session (e.g. from `oc:sessions` or the output of successful `oc:spawn`).
+`<session-id>` is a full id or unique prefix. Best-effort abort; a session that already finished is a no-op.

@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { readLogState, isPidAlive } from "./tail.mjs";
+import { readLogState, isPidAlive } from "./log.mjs";
 import {
   logsDir,
   upsertSession,
@@ -14,7 +14,7 @@ import {
 
 /** @import { SessionRecord } from "./ledger.mjs" */
 
-const PROBE_MS = 90000; // How long to wait for the first session event after spawning opencode before giving up
+const PROBE_MS = 60000; // How long to wait for the first session event after spawning opencode before giving up
 const TERMINAL_STATUSES = new Set(["done", "error", "cancelled"]);
 
 /**
@@ -81,7 +81,7 @@ function buildCliArgs({
 }
 
 /**
- * Starts a new `opencode` session by spawning the `opencode` process with the appropriate command-line arguments and environment variables. The function creates a temporary log file for capturing the output of the `opencode` process, then spawns the process in a detached state. It waits for the process to start successfully and then polls the log file for events indicating that the session has been initialized or if any errors have occurred. If a session ID is observed in the logs, it updates the session ledger accordingly. If any errors occur during startup or if no events are observed within a specified timeout, it attempts to kill the process group and returns an error result.
+ * Starts a new `opencode` session by spawning the `opencode` process with the appropriate command-line arguments and environment variables. The function creates a temporary log file for capturing the output of the `opencode` process, then spawns the process in a detached state. It waits for the process to start successfully and then polls the log file until a session ID is observed with no unrecovered error, at which point the session ledger is updated. An error event alone never settles the probe — with model fallbacks configured, opencode retries and the session recovers — so a startup error is fatal only when opencode exits with it unrecovered. If no session materializes within the probe timeout, the process group is killed and an error result returned (naming the pending error, if one was seen).
  * @param {Object} options - the options for starting the spawn
  * @param {string} options.binary - the path to the `opencode` binary to execute
  * @param {string} options.prompt - the user prompt to pass to `opencode`
@@ -209,7 +209,11 @@ export async function startSpawn({
 
     const check = () => {
       const state = readLogState(tempLog);
-      if (state.errorSeen) return settle({ kind: "error-event", state });
+      // An error event while opencode is still alive is provisional: with
+      // model fallbacks configured, opencode retries and the session recovers
+      // moments later (readLogState clears errorSeen once model work follows
+      // the error). Fatal errors make opencode exit — onExit settles those.
+      if (state.errorSeen) return false;
       if (state.observedSessionId) return settle({ kind: "ok", state });
       return false;
     };
@@ -237,7 +241,9 @@ export async function startSpawn({
     return {
       ok: false,
       kind: "timeout",
-      message: `opencode did not produce any event in ${PROBE_MS}ms`,
+      message: probeResult.state.errorSeen
+        ? `opencode did not recover from an error in ${PROBE_MS}ms: ${probeResult.state.errorMessage ?? "(no detail)"}`
+        : `opencode did not produce any event in ${PROBE_MS}ms`,
       logFile: tempLog,
       pid: child.pid,
     };

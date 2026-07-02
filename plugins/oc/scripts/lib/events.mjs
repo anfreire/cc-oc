@@ -138,7 +138,7 @@
 
 /**
  * cc-oc's synthetic event for unparseable log lines. Not emitted by opencode
- * itself — `parseLine` produces one whenever `JSON.parse` throws on a line,
+ * itself — `parseAll` produces one whenever `JSON.parse` throws on a line,
  * treating the raw text as bare stderr from opencode's process.
  *
  * @typedef {object} StderrEvent
@@ -164,9 +164,11 @@
  */
 
 /**
- * Returns true if the event reports a session-ending error. Used by the spawn
- * probe and the tail reconciler to distinguish a clean exit from a failure;
- * session end itself is detected by the opencode process dying, not by events.
+ * Returns true if the event reports an error. Whether it *fails* the session
+ * is decided by what follows: `readLogState` counts an error only when no
+ * model work comes after it (opencode recovers transient errors itself, e.g.
+ * by retrying on a fallback model). Session end is detected by the opencode
+ * process dying, not by events.
  *
  * @param {OpenCodeEvent | null | undefined} event
  * @returns {boolean}

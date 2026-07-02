@@ -8,7 +8,7 @@
     {
       "name": "oc",
       "source": "./plugins/oc",
-      "description": "Thin launcher for opencode from Claude Code. Spawn / tail / wait / sessions / cancel. Always detached, fire-and-forget."
+      "description": "Thin launcher for opencode from Claude Code. Spawn / wait / debug / sessions / cancel. Always detached, fire-and-forget."
     }
   ]
 }

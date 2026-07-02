@@ -2,7 +2,7 @@
 
 > Thin launcher for [opencode](https://opencode.ai) from inside [Claude Code](https://claude.ai/code).
 
-Five slash commands — `/oc:spawn`, `/oc:tail`, `/oc:wait`, `/oc:sessions`, `/oc:cancel` — that wrap `opencode run`. Always detached, fire-and-forget. No config, no MCP brokerage, no abstractions on top of opencode: every flag passes straight through, every behavior comes from opencode itself. Sessions are scoped to the current Claude Code session.
+Five slash commands — `/oc:spawn`, `/oc:wait`, `/oc:debug`, `/oc:sessions`, `/oc:cancel` — that wrap `opencode run`. Always detached, fire-and-forget. No config, no MCP brokerage, no abstractions on top of opencode: every flag passes straight through, every behavior comes from opencode itself. Sessions are scoped to the current Claude Code session.
 
 No daemon, no broker, no npm dependencies. Native Node ESM.
 
@@ -48,22 +48,9 @@ Flags (all optional, all pass through to `opencode run`):
 | `--dangerously-skip-permissions` | Bypass opencode's permission prompts for this spawn |
 | `--session <sid>` | Resume that specific opencode session |
 
-cc-oc does **not** validate flag values — opencode does. After spawn, cc-oc waits up to 90 seconds for opencode to emit its first event so the real session id can be captured and startup-time rejections (bad model, bad auth, config errors) surface in the spawn output. Once opencode emits its first event, cc-oc prints the session id and detaches; opencode keeps running.
+cc-oc does **not** validate flag values — opencode does. After spawn, cc-oc waits up to 60 seconds for opencode to emit its first event so the real session id can be captured and startup-time rejections (bad model, bad auth, config errors) surface in the spawn output. Once opencode emits its first event, cc-oc prints the session id and detaches; opencode keeps running.
 
 On a failed start the output also prints a `recovery:` line — the absolute path to a bundled guide (`reference/recovery.md`) covering how to find a valid model/agent, decode the provider error, and handle a session stuck `running` on a usage limit.
-
-### `/oc:tail`
-
-Peek at or stream a session's **event trace** (tool calls, model text, errors) — for watching progress or debugging. To get the agent's final answer, use `/oc:wait`.
-
-```text
-/oc:tail ses_abc                  # specific session (full id or unique prefix)
-/oc:tail ses_abc --follow         # stream live until terminal
-/oc:tail ses_abc --events 50      # last 50 events
-/oc:tail ses_abc --events 5 --follow   # last 5 then stream new
-```
-
-`--follow` blocks up to 15 minutes. `--events N` defaults to 1 and counts *renderable* events (structural events like `step_finish` never make it come back empty). Combinable.
 
 ### `/oc:wait`
 
@@ -71,6 +58,14 @@ Block until a session finishes, then **return the result**: the agent's final an
 
 ```text
 /oc:wait ses_abc
+```
+
+### `/oc:debug`
+
+Inspect a session — progress, tool calls, failures. Prints a status header (`session:` / `status:` / `activity:`) followed by the **full event trace** (model text, tool calls, errors, stderr), parsed and rendered from the session log. No flags, one output shape for every session state: a running session shows its trace so far, a missing or empty log renders `(no events)`. To get the agent's final answer, use `/oc:wait`.
+
+```text
+/oc:debug ses_abc                 # full id or unique prefix
 ```
 
 ### `/oc:sessions`
@@ -83,14 +78,15 @@ ses_abc12345    2m ago    running  review the staged diff
 ses_def67890    5m ago    done     fix the failing test
 ```
 
-Three statuses:
-- `running` — opencode child is alive and the log has no terminal event.
-- `done` — the log shows `session_idle` / `step_finish`, or `/oc:cancel` was called.
-- `error` — the log shows a `session_error` / `error` event, or the child died silently.
+Four statuses:
+- `running` — the opencode child is alive.
+- `done` — the child exited and the log doesn't end in an error.
+- `error` — the child exited with an unrecovered error as the log's last word, or died before producing any events. An error opencode recovered from (e.g. by retrying on a fallback model) doesn't fail the session — it stays visible in `/oc:debug`, but the verdict comes from what happened after it.
+- `cancelled` — `/oc:cancel` was called.
 
 ### `/oc:cancel`
 
-Abort a running session by id. Best-effort: `opencode session abort` first, then `SIGTERM` the process group, then the ledger entry is marked `done`. No-op on already-finished sessions.
+Abort a running session by id. Best-effort: the ledger entry is marked `cancelled` first, then `opencode session abort`, then `SIGTERM` the process group. No-op on already-finished sessions.
 
 ```text
 /oc:cancel ses_abc
@@ -102,26 +98,28 @@ Abort a running session by id. Best-effort: `opencode session abort` first, then
 /oc:spawn "<prompt>"
   └─ spawn `opencode run --format json` detached: opencode owns its own process group,
      stdio wired to a temp log file via raw fds
-  └─ probe up to 90s for the first event:
-       error event  → surface error, kill child, exit 1
-       sessionID    → rename temp log to <sid>.ndjson, ledger entry as `running`, exit 0
-       timeout      → kill child, exit 1
-       no events    → child died silently; exit 1
-  └─ print session id + the four follow-up commands, child.unref(), exit
+  └─ probe up to 60s for a session id:
+       sessionID, no pending error → rename temp log to <sid>.ndjson, ledger entry as `running`, exit 0
+       exit w/ unrecovered error   → surface error inline, exit 1
+       exit w/ no events           → child died silently; exit 1
+       timeout                     → kill child, surface the pending error if any, exit 1
+     (an error event alone never settles the probe — with model fallbacks opencode
+      retries and recovers; opencode exiting is what makes an error final)
+  └─ print session id + the follow-up commands, child.unref(), exit
      (opencode keeps running until done; cc-oc has long left)
 
-/oc:tail / /oc:sessions
-  └─ reconcile-on-read: scan the log for terminal events, update ledger status lazily
+/oc:wait / /oc:debug / /oc:sessions
+  └─ reconcile-on-read: pid dead → error only if the log ends in an unrecovered error, lazily
 
 /oc:cancel <id>
-  └─ if running: opencode session abort + SIGTERM process group, mark done
+  └─ if running: mark cancelled, opencode session abort + SIGTERM process group
   └─ else:       no-op
 
 SessionEnd hook
   └─ prune logs older than 14 days, or oldest-first when over 500 MB total
 ```
 
-The 20-second probe is **observation-only**: cc-oc never preflights model registries, validates API keys, or shadows opencode's startup logic. It watches opencode's own log + child-exit signal for a window that's generous enough to capture opencode's real session id and surface any startup-time error verbatim.
+The 60-second probe is **observation-only**: cc-oc never preflights model registries, validates API keys, or shadows opencode's startup logic. It watches opencode's own log + child-exit signal for a window that's generous enough to capture opencode's real session id and surface any startup-time error verbatim.
 
 ## Files written by this plugin
 

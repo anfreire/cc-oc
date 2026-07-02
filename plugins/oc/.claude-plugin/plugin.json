@@ -1,7 +1,7 @@
 {
   "name": "oc",
-  "version": "0.7.3",
-  "description": "Thin launcher for opencode from Claude Code. Spawn / tail / wait / sessions / cancel. Always detached, fire-and-forget.",
+  "version": "0.8.0",
+  "description": "Thin launcher for opencode from Claude Code. Spawn / wait / debug / sessions / cancel. Always detached, fire-and-forget.",
   "author": {
     "name": "anfreire"
   },

@@ -8,11 +8,20 @@ import {
   reconcileSessionState,
   cancelSession,
 } from "./lib/spawn.mjs";
-import { readDigest, followLog, readLogState } from "./lib/tail.mjs";
+import { renderLog, readLogState } from "./lib/log.mjs";
 import { findOpencodeBinary, sessionTitles } from "./lib/opencode-bin.mjs";
 import { findSession, listSessions, logsDir } from "./lib/ledger.mjs";
 
-const SUBCMDS = new Set(["spawn", "tail", "wait", "sessions", "cancel", "gc"]);
+// stdout/stderr may be a pipe the consumer closes early (`debug <id> | head`);
+// dying with an unhandled EPIPE stack helps no one — exit quietly, SIGPIPE-style.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (e) => {
+    if (e.code === "EPIPE") process.exit(0);
+    throw e;
+  });
+}
+
+const SUBCMDS = new Set(["spawn", "wait", "debug", "sessions", "cancel", "gc"]);
 const ARGS_SPEC = {
   spawn: {
     dir: { type: "string" },
@@ -24,11 +33,8 @@ const ARGS_SPEC = {
     "dangerously-skip-permissions": { type: "boolean" },
     session: { type: "string" },
   },
-  tail: {
-    follow: { type: "boolean" },
-    events: { type: "string" },
-  },
   wait: {},
+  debug: {},
   sessions: {},
   cancel: {},
   gc: {},
@@ -47,7 +53,7 @@ function die(msg, code = 1) {
 }
 
 /**
- * Retrieves the current Claude Code session ID from the `CLAUDE_CODE_SESSION_ID` environment variable. This is used to associate spawned OpenCode sessions with the current Claude Code session, allowing for better organization and filtering of sessions when listing or tailing them.
+ * Retrieves the current Claude Code session ID from the `CLAUDE_CODE_SESSION_ID` environment variable. This is used to associate spawned OpenCode sessions with the current Claude Code session, allowing for better organization and filtering of sessions when listing or inspecting them.
  * @returns {string|null} the current Claude Code session ID if set, or null if not set
  */
 function ccSessionIdFromEnv() {
@@ -210,11 +216,10 @@ async function cmdSpawn(argv) {
     `  node ${fileURLToPath(import.meta.url)} wait ${result.sessionId}\n`,
   );
   process.stdout.write(`\n`);
-  process.stdout.write(`Watch or inspect events:\n`);
+  process.stdout.write(`Inspect or manage:\n`);
   const sid = result.sessionId;
   const rows = [
-    [`/oc:tail ${sid}`, "peek last events"],
-    [`/oc:tail ${sid} --follow`, "stream live events"],
+    [`/oc:debug ${sid}`, "status + full event trace"],
     [`/oc:cancel ${sid}`, "abort"],
     [`/oc:sessions`, "list sessions"],
   ];
@@ -225,61 +230,33 @@ async function cmdSpawn(argv) {
 }
 
 /**
- * Handles the `tail` subcommand, which allows users to peek at or follow the event stream of a specific OpenCode session. The function validates the input session ID, checks for the existence of the corresponding log file, and then either outputs the last N events or follows the log until the session completes, depending on the provided flags.
- * @param {string[]} argv - the command-line arguments passed to the `tail` subcommand (excluding the subcommand itself)
+ * Handles the `debug` subcommand: the way to inspect a session's progress or
+ * failures without touching the raw NDJSON log. Prints a short status header
+ * (session id, ledger status, last-activity time) followed by the session's
+ * full rendered event trace — model text, tool calls, errors, stderr. One
+ * output shape for every session state: a running session shows its trace so
+ * far, a finished one the whole run, and a missing or empty log renders as
+ * "(no events)". The final answer stays `wait`'s job.
+ * @param {string[]} argv - the command-line arguments passed to the `debug` subcommand (excluding the subcommand itself)
  * @returns {Promise<void>} a promise that resolves when the command has completed
  */
-async function cmdTail(argv) {
-  const { flags, positionals } = parseArgs(argv, ARGS_SPEC.tail);
-  if (positionals.length > 1) {
-    die(
-      `unexpected token(s) after session id: ${JSON.stringify(positionals.slice(1).join(" "))} — tail accepts at most one id`,
-    );
-  }
+async function cmdDebug(argv) {
+  const { positionals } = parseArgs(argv, ARGS_SPEC.debug);
+  if (positionals.length !== 1) die("usage: /oc:debug <session-id>");
 
-  let count = 1;
-  if (flags.events !== undefined) {
-    const n = Number(flags.events);
-    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
-      die(
-        `--events must be a non-negative integer (got ${JSON.stringify(flags.events)})`,
-      );
-    }
-    count = n;
-  }
-
-  if (!positionals[0])
-    die("usage: /oc:tail <session-id> [--follow] [--events N]");
   const env = process.env;
   let record = findSession(positionals[0], env);
   if (!record) die(`no session matches "${positionals[0]}"`);
 
   record = reconcileSessionState(record, env);
-  if (!record.logFile || !fs.existsSync(record.logFile)) {
-    die(`no log file for session ${record.sessionId}`);
-  }
+  const trace = renderLog(record.logFile);
+  const { lastEventAt } = readLogState(record.logFile);
 
-  const { digest, fileSize, baseTimestamp } = readDigest(record.logFile, {
-    count,
-  });
-  if (digest) {
-    process.stdout.write(digest);
-    if (!digest.endsWith("\n")) process.stdout.write("\n");
-  }
-
-  if (flags.follow && record.status === "running") {
-    const r = await followLog(record.pid, record.logFile, {
-      startOffset: fileSize,
-      baseTimestamp,
-    });
-    if (r.timedOut) die("tail timed out after 15 min");
-    reconcileSessionState(record, env);
-    return;
-  }
-
-  if (!flags.follow && record.status === "running") {
-    process.stdout.write(`\n(session still running; use --follow to wait)\n`);
-  }
+  process.stdout.write(`session:  ${record.sessionId}\n`);
+  process.stdout.write(`status:   ${record.status}\n`);
+  process.stdout.write(`activity: ${relTime(lastEventAt)}\n`);
+  process.stdout.write(`\n`);
+  process.stdout.write(trace ? `${trace}\n` : `(no events)\n`);
 }
 
 /**
@@ -288,7 +265,7 @@ async function cmdTail(argv) {
  * on stdout for a clean finish, or a terse error line on stderr (exit 1) on
  * failure. This is the canonical "get the answer" path — background it
  * (`run_in_background`) and the completion ping carries the answer, so there's
- * no separate read step. The full event trace stays opt-in behind `tail`, so
+ * no separate read step. The full event trace stays opt-in behind `debug`, so
  * `wait` returns the deliverable, not the noise. For a pure completion barrier
  * with no output, redirect: `wait <id> > /dev/null` (errors still surface on
  * stderr). The opencode process dying is the only termination signal, so every
@@ -344,7 +321,7 @@ async function cmdWait(argv) {
   // Finished cleanly but produced no model text (e.g. a tool-only run). Keep
   // stdout answer-only — the diagnostic goes to stderr.
   process.stderr.write(
-    `session ${record.sessionId} finished with no model text — see /oc:tail ${record.sessionId}\n`,
+    `session ${record.sessionId} finished with no model text — see /oc:debug ${record.sessionId}\n`,
   );
 }
 
@@ -480,7 +457,7 @@ const HELP = `oc <subcommand> [args]
 Subcommands:
   spawn     start an opencode session (prompt on stdin via heredoc)
   wait      block until a session finishes, then print its final answer (or error)
-  tail      stream or peek a session's events
+  debug     print a session's status and full event trace
   sessions  list sessions in this Claude Code session
   cancel    abort a running session
 
@@ -494,9 +471,8 @@ Spawn flags (all optional, all pass through to \`opencode run\`):
   --dangerously-skip-permissions      bypass opencode permission prompts
   --session <session-id>                     resume a specific opencode session
 
-Tail flags (\`tail\` shows the event trace; use \`wait\` to get the final answer):
-  --follow                            stream events live until the session finishes
-  --events <n>                        last N renderable events (default 1; combinable with --follow)
+\`debug\` and \`wait\` split the two jobs: \`debug\` shows the event trace, \`wait\`
+returns the final answer. Both take exactly one <session-id> and no flags.
 `;
 
 async function main() {
@@ -510,8 +486,8 @@ async function main() {
   const rest = argv.slice(1);
   try {
     if (sub === "spawn") await cmdSpawn(rest);
-    else if (sub === "tail") await cmdTail(rest);
     else if (sub === "wait") await cmdWait(rest);
+    else if (sub === "debug") await cmdDebug(rest);
     else if (sub === "sessions") await cmdSessions(rest);
     else if (sub === "cancel") await cmdCancel(rest);
     else if (sub === "gc") await cmdGc(rest);

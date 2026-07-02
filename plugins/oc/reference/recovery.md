@@ -46,14 +46,14 @@ opencode models <provider> --verbose | awk '/^[a-z]/{id=$0;v="";next} /"variants
 opencode agent list        # agent names you can pass to --agent
 ```
 
-A wrong `--agent` doesn't error either — opencode warns (`! agent "x" not found. Falling back to default agent`) and runs on the *default* agent, so the session succeeds as something you didn't ask for. The warning shows up in `/oc:tail`; check the name here if you expected a custom agent.
+A wrong `--agent` doesn't error either — opencode warns (`! agent "x" not found. Falling back to default agent`) and runs on the *default* agent, so the session succeeds as something you didn't ask for. The warning shows up in `/oc:debug`; check the name here if you expected a custom agent.
 
 ## Usage limit — the silent stall
 
 The one failure cc-oc **cannot** see. When the provider returns `429` `usage_limit_reached` (`isRetryable: true`), opencode swallows it and retries internally with exponential backoff (~3s → 256s) until the quota window resets. Nothing is written to the cc-oc event stream, so:
 
 - `/oc:sessions` shows `running` with an `activity` gap that keeps growing.
-- `/oc:tail` shows no new events; `/oc:tail --follow` blocks, then times out at 15 min.
+- `/oc:debug` shows `status: running` with a stale `activity`, and the trace ends without an error.
 - There is **no** `error` event and **no** `done` — the session is alive, just waiting.
 
 Confirm it's a usage limit (not a slow tool):
