@@ -200,21 +200,20 @@ async function cmdSpawn(argv) {
     );
     process.stderr.write(`OpenCode failed to start.\n`);
     process.stderr.write(`error:    ${result.message}\n`);
-    process.stderr.write(`log:      ${result.logFile}\n`);
+    if (result.sessionId) {
+      process.stderr.write(`debug:    /oc:debug ${result.sessionId}\n`);
+    } else {
+      process.stderr.write(`log:      ${result.logFile}\n`);
+    }
     process.stderr.write(`recovery: ${recoveryDoc}\n`);
     process.exit(1);
   }
 
   process.stdout.write(`Started OpenCode session.\n`);
   process.stdout.write(`session: ${result.sessionId}\n`);
-  process.stdout.write(`log:     ${result.logFile}\n`);
   process.stdout.write(`\n`);
-  process.stdout.write(
-    `Get the answer (blocks; run_in_background to be pinged when ready):\n`,
-  );
-  process.stdout.write(
-    `  node ${fileURLToPath(import.meta.url)} wait ${result.sessionId}\n`,
-  );
+  process.stdout.write(`Get the answer (you'll be notified when it ends):\n`);
+  process.stdout.write(`  /oc:wait ${result.sessionId}\n`);
   process.stdout.write(`\n`);
   process.stdout.write(`Inspect or manage:\n`);
   const sid = result.sessionId;
@@ -263,15 +262,15 @@ async function cmdDebug(argv) {
  * Handles the `wait` subcommand, which blocks until a spawned OpenCode session
  * reaches a terminal state, then returns the result: the agent's final answer
  * on stdout for a clean finish, or a terse error line on stderr (exit 1) on
- * failure. This is the canonical "get the answer" path — background it
- * (`run_in_background`) and the completion ping carries the answer, so there's
- * no separate read step. The full event trace stays opt-in behind `debug`, so
- * `wait` returns the deliverable, not the noise. For a pure completion barrier
- * with no output, redirect: `wait <id> > /dev/null` (errors still surface on
- * stderr). The opencode process dying is the only termination signal, so every
- * terminal state is surfaced, not just success. A session cancelled via
- * `/oc:cancel` is reported as cancelled (stderr, exit 1) rather than having its
- * partial output passed off as a clean answer.
+ * failure. This is the canonical "get the answer" path — run it under Monitor
+ * (`persistent: true`, stderr merged) and the completion ping carries the
+ * answer, so there's no separate read step. The full event trace stays opt-in
+ * behind `debug`, so `wait` returns the deliverable, not the noise. For a pure
+ * completion barrier with no output, redirect: `wait <id> > /dev/null` (errors
+ * still surface on stderr). The opencode process dying is the only termination
+ * signal, so every terminal state is surfaced, not just success. A session
+ * cancelled via `/oc:cancel` is reported as cancelled (stderr, exit 1) rather
+ * than having its partial output passed off as a clean answer.
  * @param {string[]} argv - the command-line arguments passed to the `wait` subcommand (excluding the subcommand itself)
  * @returns {Promise<void>} a promise that resolves when the command has completed
  */

@@ -1,15 +1,19 @@
 ---
 description: Block until an opencode session finishes, then print its final answer.
 argument-hint: "<session-id>"
-allowed-tools: Bash(node:*)
+allowed-tools: Bash(node:*), Monitor
 ---
 
-Run:
+Run it under Monitor with `persistent: true` — a notification arrives when the session ends.
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" wait <session-id>
+```
+Monitor({
+  command: 'node "${CLAUDE_PLUGIN_ROOT}/scripts/oc.mjs" wait <session-id> 2>&1',
+  description: "opencode session <session-id>",
+  persistent: true,
+})
 ```
 
 `<session-id>` is a full id or unique prefix (from `/oc:spawn` or `/oc:sessions`).
 
-Prints the final answer on stdout (exit 0); an errored or cancelled session reports on stderr (exit 1). Usually run in the background (`run_in_background: true`) so the completion notification carries the answer — run it directly when you want to block on it now.
+Prints the final answer on stdout (exit 0), error or cancellation on stderr (exit 1). The `2>&1` is required — `wait` reports errors and cancellations on stderr — without it a failed session ends the watch with exit 1 and no message.

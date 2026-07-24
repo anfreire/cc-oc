@@ -54,7 +54,7 @@ On a failed start the output also prints a `recovery:` line — the absolute pat
 
 ### `/oc:wait`
 
-Block until a session finishes, then **return the result**: the agent's final answer on stdout (exit `0`), or `session <id> error: <message>` on stderr (exit `1`) on failure. This is the canonical way to get an answer — run it in the background and the completion notification carries the answer, no separate read step.
+Block until a session finishes, then **return the result**: the agent's final answer on stdout (exit `0`), or `session <id> error: <message>` on stderr (exit `1`) on failure. This is the canonical way to get an answer — run it under Monitor with `persistent: true` (and `2>&1`, so failures notify too) and the completion notification carries the answer, no separate read step.
 
 ```text
 /oc:wait ses_abc
