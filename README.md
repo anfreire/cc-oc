@@ -135,3 +135,7 @@ Set `CLAUDE_HOME=/some/path` to relocate.
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+---
+
+**More agent tooling** — [patch-cc](https://github.com/anfreire/patch-cc): patch the Claude Code binary (live thinking, Codex models) · [summon-cc](https://github.com/anfreire/summon-cc): give your agent a crew of Claude Code workers · [omoctl](https://github.com/anfreire/omoctl): manage oh-my-openagent profiles · [wiki-spaces](https://github.com/anfreire/wiki-spaces): a wiki your AI agent keeps
