@@ -212,8 +212,18 @@ async function cmdSpawn(argv) {
   process.stdout.write(`Started OpenCode session.\n`);
   process.stdout.write(`session: ${result.sessionId}\n`);
   process.stdout.write(`\n`);
-  process.stdout.write(`Get the answer (you'll be notified when it ends):\n`);
-  process.stdout.write(`  /oc:wait ${result.sessionId}\n`);
+  process.stdout.write(
+    `Get the answer (a notification arrives when the session ends):\n`,
+  );
+  process.stdout.write(`  Monitor({\n`);
+  process.stdout.write(
+    `    command: 'node "${fileURLToPath(import.meta.url)}" wait ${result.sessionId} 2>&1',\n`,
+  );
+  process.stdout.write(
+    `    description: "opencode session ${result.sessionId}",\n`,
+  );
+  process.stdout.write(`    persistent: true,\n`);
+  process.stdout.write(`  })\n`);
   process.stdout.write(`\n`);
   process.stdout.write(`Inspect or manage:\n`);
   const sid = result.sessionId;

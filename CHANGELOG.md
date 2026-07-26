@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.2 — 2026-07-26
+
+**`/oc:spawn` prints the exact `Monitor` call, not a pointer to it.** Field data on 0.8.1, same day it shipped: the driving agent spawned two sessions and ran both waits as plain foreground `Bash` calls — the Monitor recipe never entered its context. 0.8.1 had put the recipe in `commands/wait.md` and pointed at it from spawn's output (`/oc:wait <id>`), but a skill body only loads when the skill is invoked, and the agent had no reason to invoke it: `commands/spawn.md` — necessarily in context, it's how the session got spawned — already teaches the `node oc.mjs <subcommand>` shape, so the agent pattern-matched `/oc:wait <id>` onto that template and reasoned itself out of the skill hop ("avoid redundant instruction expansion"). The one surface guaranteed to be read at the decision moment is spawn's own stdout — so that's where the recipe now lives, with nothing left to resolve or infer:
+
+```
+Get the answer (a notification arrives when the session ends):
+  Monitor({
+    command: 'node "<abs path to oc.mjs>" wait <sid> 2>&1',
+    description: "opencode session <sid>",
+    persistent: true,
+  })
+```
+
+Real session id, `2>&1` included, and the script path from `import.meta.url` — the running install's own absolute path, so the printed command is copy-runnable as-is. The laziest action available to the agent (run the block in front of it) is now the correct one. `commands/wait.md` is unchanged: it still carries the recipe for a manually typed `/oc:wait`, and its `description` still reads "Block until…" — accurate for the subcommand, and no longer load-bearing, since an agent can only hand-roll `oc.mjs wait` by having spawned, which now shows the `Monitor` call. `commands/spawn.md`'s output summary updated to match (it still said spawn prints the "log path", stale since 0.8.1 dropped that line).
+
 ## 0.8.1 — 2026-07-24
 
 **`/oc:wait` moves to Monitor; `/oc:spawn` stops handing out the raw log path.** Two field behaviours, both traceable to output wording rather than logic. The driving agent blocked on `wait` in the foreground instead of backgrounding it — and a foreground call is capped well below what a session takes, so the answer never arrived. And on any failure it read `<sid>.ndjson` directly instead of running `/oc:debug`, because spawn printed that path on every successful start. Neither is a bug in the mechanism; both are what the surrounding text told it to do.

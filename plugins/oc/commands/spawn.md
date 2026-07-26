@@ -27,4 +27,4 @@ Flags — all optional, passed through to `opencode run` verbatim; cc-oc validat
 - `--dangerously-skip-permissions` — bypass opencode's permission prompts for this spawn
 - `--session <session-id>` — resume that opencode session
 
-On success it prints the session id, log path, and the follow-up commands (`wait` for the answer; `debug`, `cancel`, `sessions` to manage). Startup errors surface inline once opencode gives up on them — an error opencode recovers from (e.g. a model fallback) doesn't fail the spawn. On any failure, or a session stuck `running` with no new events, read the printed `recovery:` file (`reference/recovery.md`).
+On success it prints the session id, the exact `Monitor` call that collects the answer, and the management commands (`debug`, `cancel`, `sessions`). Startup errors surface inline once opencode gives up on them — an error opencode recovers from (e.g. a model fallback) doesn't fail the spawn. On any failure, or a session stuck `running` with no new events, read the printed `recovery:` file (`reference/recovery.md`).
