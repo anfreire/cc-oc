@@ -2,6 +2,8 @@
 
 > Thin launcher for [opencode](https://opencode.ai) from inside [Claude Code](https://claude.ai/code).
 
+An agent shouldn't be the only reviewer of its own work — and no single model is best at everything. cc-oc puts every model opencode can reach one slash command away from a Claude Code session.
+
 Five slash commands — `/oc:spawn`, `/oc:wait`, `/oc:debug`, `/oc:sessions`, `/oc:cancel` — that wrap `opencode run`. Always detached, fire-and-forget. No config, no MCP brokerage, no abstractions on top of opencode: every flag passes straight through, every behavior comes from opencode itself. Sessions are scoped to the current Claude Code session.
 
 No daemon, no broker, no npm dependencies. Native Node ESM.
