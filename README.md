@@ -1,5 +1,10 @@
 # cc-oc
 
+> [!WARNING]
+> **This repository has been archived and is no longer maintained.**
+>
+> Development of cc-oc has stopped. Its successor is [**conclave**](https://github.com/anfreire/conclave): one CLI through which an agent on any harness spawns agents on Claude Code, Codex or OpenCode and exchanges messages with them — both directions, not only opencode from inside Claude Code.
+
 > Thin launcher for [opencode](https://opencode.ai) from inside [Claude Code](https://claude.ai/code).
 
 An agent shouldn't be the only reviewer of its own work — and no single model is best at everything. cc-oc puts every model opencode can reach one slash command away from a Claude Code session.
@@ -140,4 +145,4 @@ MIT. See [`LICENSE`](LICENSE).
 
 ---
 
-**More agent tooling** — [patch-cc](https://github.com/anfreire/patch-cc): patch the Claude Code binary (live thinking, Codex models) · [summon-cc](https://github.com/anfreire/summon-cc): give your agent a crew of Claude Code workers · [omoctl](https://github.com/anfreire/omoctl): manage oh-my-openagent profiles · [wiki-spaces](https://github.com/anfreire/wiki-spaces): a wiki your AI agent keeps
+**More agent tooling** — [conclave](https://github.com/anfreire/conclave): spawn agents on any harness and exchange messages with them · [patch-cc](https://github.com/anfreire/patch-cc): patch the Claude Code binary (live thinking, Codex models) · [omoctl](https://github.com/anfreire/omoctl): manage oh-my-openagent profiles · [wiki-spaces](https://github.com/anfreire/wiki-spaces): a wiki your AI agent keeps

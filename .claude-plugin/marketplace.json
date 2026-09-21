@@ -8,7 +8,7 @@
     {
       "name": "oc",
       "source": "./plugins/oc",
-      "description": "Thin launcher for opencode from Claude Code. Spawn / wait / debug / sessions / cancel. Always detached, fire-and-forget."
+      "description": "DEPRECATED — archived and unmaintained; superseded by conclave (https://github.com/anfreire/conclave). Thin launcher for opencode from Claude Code. Spawn / wait / debug / sessions / cancel. Always detached, fire-and-forget."
     }
   ]
 }
